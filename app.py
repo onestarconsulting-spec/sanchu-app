@@ -2,10 +2,47 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-from database.db_manager import init_db, insert_teichaku, select_all_teichaku, insert_kankyo, select_all_kankyo, insert_shukaku, select_all_shukaku
+from database.db_manager import (
+    init_db, 
+    insert_teichaku, 
+    select_all_teichaku, 
+    insert_kankyo, 
+    select_all_kankyo, 
+    insert_shukaku, 
+    select_all_shukaku,
+    get_connection  # データベース接続機能を新しく追加
+)
 
 # データベースの初期化
 init_db()
+
+# ----------------------------------------------------
+# データの削除を処理する裏方の命令（新設）
+# ----------------------------------------------------
+def delete_record(table_name, record_id):
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"DELETE FROM {table_name} WHERE id = %s", (record_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except Exception as e:
+        # テーブル名が日本語（"定植"など）の場合の自動救済措置
+        try:
+            alt_names = {"teichaku": "teichaku", "kankyo": "kankyo", "shukaku": "shukaku"}
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM {alt_names.get(table_name, table_name)} WHERE id = %s", (record_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return True
+        except:
+            pass
+        st.error(f"削除中にエラーが発生しました: {e}")
+        return False
 
 # 画面全体の基本設定（スマホ対応）
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
@@ -53,7 +90,7 @@ elif menu == "定植登録":
             st.success("定植データをデータベースに安全に保存しました！")
 
 # ----------------------------------------------------
-# ③ 栽培一覧
+# ③ 栽培一覧（CSV出力と削除ボタンを新設）
 # ----------------------------------------------------
 elif menu == "栽培一覧":
     st.header("【現在栽培中のロット一覧】")
@@ -62,8 +99,25 @@ elif menu == "栽培一覧":
     if not records:
         st.warning("現在栽培中のデータはありません。")
     else:
+        # 【新機能】定植データのCSVダウンロードボタン
+        df_teichaku = pd.DataFrame(records)
+        csv_teichaku = df_teichaku.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 定植一覧データをCSVダウンロード",
+            data=csv_teichaku,
+            file_name=f"sanchu_lots_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+        st.markdown("---")
+
         for record in records:
-            _, variety, house, bed, plant_date, quantity, target_size, _, _ = record
+            record_id = record[0] # データベースの識別番号を取得
+            variety = record[1]
+            house = record[2]
+            bed = record[3]
+            plant_date = record[4]
+            quantity = record[5]
+            target_size = record[6]
             
             # 日数計算ロジック
             elapsed_days = "ーー"
@@ -76,11 +130,17 @@ elif menu == "栽培一覧":
                 
             with st.container():
                 st.markdown(f"### 📍 {house} - {bed} （{variety}）")
-                col1, col2 = st.columns([2, 1])
+                col1, col2, col3 = st.columns([2, 1, 1])
                 with col1:
-                    st.write(f"🌱 株数: {quantity}株  /  📅 定植日: {plant_date}")
+                    st.write(f"🌱 株数: {quantity}株  /  📅 定植日: {plant_date}  /  🎯 予定サイズ: {target_size}")
                 with col2:
                     st.success(f"定植 {elapsed_days} 日目 / 生育率 63%")
+                with col3:
+                    # 【新機能】各ロットの右側に削除ボタンを設置
+                    if st.button("🗑️ このロットを削除", key=f"del_lot_{record_id}"):
+                        if delete_record("teichaku", record_id):
+                            st.success("データを削除しました！")
+                            st.rerun() # 画面を自動で最新状態に更新
                 st.markdown("---")
 
 # ----------------------------------------------------
@@ -180,7 +240,7 @@ elif menu == "AI収穫予測":
             st.error(f"日付の計算でエラーが発生しました。入力形式を確認してください。({e})")
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析
+# ⑦ 総合グラフ分析（CSV出力ボタンを新設）
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【環境データ 総合分析ダッシュボード】")
@@ -192,6 +252,16 @@ elif menu == "総合グラフ分析":
         logs.reverse()
         df = pd.DataFrame(logs, columns=["id", "date", "temp", "min_temp", "max_temp", "water_temp", "dli", "ec", "ph", "memo", "created_at"])
         
+        # 【新機能】環境データのCSVダウンロードボタン
+        csv_kankyo = df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 環境データをCSVとしてダウンロード",
+            data=csv_kankyo,
+            file_name=f"sanchu_kankyo_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
+        st.markdown("---")
+
         # 横軸用の綺麗な日付を作成
         df["display_date"] = df["date"].apply(lambda x: x[4:6] + "/" + x[6:8] if len(x)==8 else x)
         
