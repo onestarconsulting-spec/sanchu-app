@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
+import requests  # 天気予報取得用の部品
 from database.db_manager import (
     init_db, 
     insert_teichaku, 
@@ -15,6 +16,41 @@ from database.db_manager import (
 
 # データベースの初期化
 init_db()
+
+# ----------------------------------------------------
+# 【新設】外部APIから本日の天気予報を自動取得する命令
+# ----------------------------------------------------
+def get_today_weather():
+    # ★あなたの農場のある地域の「緯度（latitude）」と「経度（longitude）」を設定してください
+    # 現在はデフォルトとして「東京」の座標（35.6895, 139.6917）にしています。
+    lat = 35.6895
+    lon = 139.6917
+    
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo"
+    
+    try:
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        # 本日のデータを抽出
+        weather_code = data["daily"]["weathercode"][0]
+        max_temp = data["daily"]["temperature_2m_max"][0]
+        min_temp = data["daily"]["temperature_2m_min"][0]
+        
+        # 世界基準の天気コード（WMO）を日本の親しみやすい表現に変換
+        weather_map = {
+            0: "☀️ 晴天", 1: "🌤️ おおむね晴れ", 2: "⛅ 時々曇り", 3: "☁️ 曇り",
+            45: "🌫️ 霧", 48: "🌫️ 霧",
+            51: "🌧️ 弱い霧雨", 53: "🌧️ 霧雨", 55: "🌧️ 強い霧雨",
+            61: "☔ 弱い雨", 63: "☔ 雨", 65: "☔ 強い雨",
+            80: "🌦️ にわか雨", 81: "🌦️ にわか雨", 82: "激しいにわか雨",
+            95: "⚡ 雷雨"
+        }
+        weather_text = weather_map.get(weather_code, "🌈 不明")
+        return weather_text, f"{max_temp} ℃", f"{min_temp} ℃"
+    except:
+        # 万が一、天気サーバーが混雑等で落ちていた場合の安全対策
+        return "⚠️ 取得失敗", "--", "--"
 
 # データの削除を処理する裏方の命令
 def delete_record(table_name, record_id):
@@ -41,7 +77,7 @@ menu = st.sidebar.radio(
 )
 
 # ----------------------------------------------------
-# ① ホーム・本日の状況（タスク・目標収穫量・環境アラートを新設！）
+# ① ホーム・本日の状況（天気予報をさらに追加！）
 # ----------------------------------------------------
 if menu == "ホーム・本日の状況":
     st.header("【本日の状況サマリー】")
@@ -51,7 +87,7 @@ if menu == "ホーム・本日の状況":
     kankyo_logs = select_all_kankyo()
     shukaku_logs = select_all_shukaku()
     
-    # --- 1. 裏側でのAI予測・ロット集計ロジック ---
+    # --- 裏側でのAI予測・ロット集計ロジック ---
     active_lots = len(teichaku_records)
     today_harvest_lots = 0
     caution_lots = 0
@@ -89,12 +125,22 @@ if menu == "ホーム・本日の状況":
             except:
                 pass
 
-    # --- 2. 【新設】AI環境アラート機能 ---
+    # --- 【新設】本日のリアルタイム天気予報エリア ---
+    w_text, w_max, w_min = get_today_weather()
+    
+    # メイン数値の上にスッキリ横並びで表示
+    st.markdown(f"### ☁️ 本日の外部天気予報 （自動取得）")
+    w_col1, w_col2, w_col3 = st.columns(3)
+    with w_col1: st.metric(label="本日の天気", value=w_text)
+    with w_col2: st.metric(label="予想最高気温", value=w_max)
+    with w_col3: st.metric(label="予想最低気温", value=w_min)
+    st.markdown("---")
+
+    # --- AI環境アラート機能 ---
     if kankyo_logs:
-        latest_env = kankyo_logs[0] # 直近の環境データ
+        latest_env = kankyo_logs[0]
         l_date, l_wtemp, l_ph = latest_env[1], latest_env[5], latest_env[8]
         
-        # 水温やpHの異常を自動検知してトップに警告を出す
         if l_wtemp > 22.0 or l_ph < 5.5 or l_ph > 6.8:
             st.error(f"⚠️ **【ハウス環境アラート発令中】** （最終入力日: {l_date}）")
             if l_wtemp > 22.0:
@@ -104,34 +150,29 @@ if menu == "ホーム・本日の状況":
             st.markdown("---")
 
     # メインの3大数値を表示
+    st.markdown("### 📊 ハウス内ロット状況")
     col1, col2, col3 = st.columns(3)
     with col1: st.metric(label="栽培中ロット", value=f"{active_lots} ロット")
     with col2: st.metric(label="本日収穫適期", value=f"{today_harvest_lots} ロット")
     with col3: st.metric(label="水温ストレス（要注意）", value=f"{caution_lots} ロット")
     st.markdown("---")
 
-    # 下半分を「目標進捗」と「本日のタスク」の2列に分ける
+    # 下半分（目標進捗と本日のタスク）
     left_col, right_col = st.columns(2)
 
     with left_col:
         st.subheader("📊 今月の目標収穫量と進捗")
-        # 画面上で今月の目標（kg）をいつでも変更可能
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         
-        # データベースから今月（2026年7月など）の収穫総重量を自動計算
         this_month_str = datetime.now().strftime("%Y%m")
         current_weight_g = 0.0
         for log in shukaku_logs:
-            # log[1]は収穫日(YYYYMMDD)
             if log[1].startswith(this_month_str):
-                current_weight_g += log[2] # 重量(g)を足し算
+                current_weight_g += log[2]
         
-        current_weight_kg = current_weight_g / 1000.0 # グラムをキログラムに変換
-        
-        # 進捗パーセンテージの計算
+        current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
         
-        # メーターと進捗バーの表示
         st.metric(label="現在の今月の収穫実績", value=f"{current_weight_kg:.2f} kg", delta=f"目標まで あと {max(0.0, target_kg - current_weight_kg):.2f} kg")
         st.progress(progress_percent / 100)
         st.write(f"現在の目標達成度: **{progress_percent} %**")
@@ -140,7 +181,6 @@ if menu == "ホーム・本日の状況":
         st.subheader("📋 本日の作業タスク")
         st.write("今日やるべき仕事のチェックリストです。終わったらチェックを入れて消し込めます。")
         
-        # アプリを開いている間だけ保持される簡易チェックリスト
         st.checkbox("今日の環境データを測定して入力する", key="task1")
         if today_harvest_lots > 0:
             st.checkbox(f"本日適期の {today_harvest_lots} ロットを収穫・登録する", key="task2")
