@@ -24,15 +24,6 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
-# 0. 収穫データから重量(g)を安全に抽出するヘルパー関数
-# ----------------------------------------------------
-def get_weight_from_log(log):
-    for val in log[2:]:
-        if isinstance(val, (int, float)) and val > 0:
-            return float(val)
-    return 0.0
-
-# ----------------------------------------------------
 # 1. 本日の天気予報取得
 # ----------------------------------------------------
 def get_today_weather():
@@ -136,7 +127,6 @@ def delete_record(table_name, record_id):
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
-# サイドメニューに「収穫実績・分析」を新設
 menu = st.sidebar.radio(
     "メニュー切り替え",
     ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "収穫実績・分析", "総合グラフ分析"]
@@ -218,7 +208,8 @@ if menu == "ホーム・本日の状況":
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         this_month_str = datetime.now().strftime("%Y%m")
         
-        current_weight_g = sum([get_weight_from_log(log) for log in shukaku_logs if log[1].startswith(this_month_str)])
+        # log[4]が重量(g)
+        current_weight_g = sum([float(log[4]) for log in shukaku_logs if str(log[1]).startswith(this_month_str) and log[4] is not None])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
         
@@ -381,7 +372,7 @@ elif menu == "AI収穫予測 (栽培管理)":
     
     yield_accuracy_factor = 1.0
     if shukaku_logs:
-        valid_weights = [get_weight_from_log(log) for log in shukaku_logs if get_weight_from_log(log) > 0]
+        valid_weights = [float(log[4]) for log in shukaku_logs if len(log) > 4 and log[4] is not None and float(log[4]) > 0]
         if valid_weights:
             avg_actual = sum(valid_weights) / len(valid_weights)
             yield_accuracy_factor = round(avg_actual / 180.0, 2)
@@ -494,7 +485,7 @@ elif menu == "AI収穫予測 (栽培管理)":
                     st.rerun()
 
 # ----------------------------------------------------
-# ⑥ 収穫実績・分析（新設！一覧表・グラフ・CSV機能）
+# ⑥ 収穫実績・分析（完全100%カラムズレ解消版）
 # ----------------------------------------------------
 elif menu == "収穫実績・分析":
     st.header("【収穫実績・分析ダッシュボード】")
@@ -503,28 +494,28 @@ elif menu == "収穫実績・分析":
     if not shukaku_logs:
         st.warning("現在登録されている収穫データはありません。「収穫登録」メニューから登録を行ってください。")
     else:
-        # データフレーム化
-        df_s = pd.DataFrame(shukaku_logs)
-        # カラム名の安全な初期化
-        cols = ["ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時"]
-        df_s = df_s.iloc[:, :len(cols)]
-        df_s.columns = cols[:len(df_s.columns)]
+        # 正しい順序（ID, 収穫日, ハウス, ベッド, 重量, 株数, 品質, 備考, 登録日時）でDataFrame作成
+        df_s = pd.DataFrame(shukaku_logs, columns=[
+            "ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時"
+        ])
+        
+        # 数値・日付変換
+        df_s["dt"] = pd.to_datetime(df_s["収穫日"].astype(str), format="%Y%m%d", errors="coerce")
+        df_s["重量(g)"] = pd.to_numeric(df_s["重量(g)"], errors="coerce").fillna(0.0)
+        df_s["重量(kg)"] = df_s["重量(g)"] / 1000.0
+        
+        # 1. 日別集計（グラフ用）
+        df_daily = df_s.groupby("dt")["重量(kg)"].sum().reset_index()
         
         st.download_button(
             label="📥 収穫実績データをCSVダウンロード",
-            data=df_s.to_csv(index=False).encode('utf-8-sig'),
+            data=df_s[["ID", "収穫日", "ハウス", "ベッド", "重量(g)", "品質", "備考", "登録日時"]].to_csv(index=False).encode('utf-8-sig'),
             file_name=f"sanchu_harvest_records_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
         st.markdown("---")
         
-        # 日別収穫量の集計とグラフ化
-        df_s["dt"] = pd.to_datetime(df_s["収穫日"].astype(str), format="%Y%m%d", errors="coerce")
-        df_s["重量(kg)"] = df_s["重量(g)"].apply(lambda x: float(x)/1000.0 if isinstance(x, (int, float)) else 0.0)
-        
         st.subheader("1. 日別 収穫総重量の推移 (kg)")
-        df_daily = df_s.groupby("dt")["重量(kg)"].sum().reset_index()
-        
         fig_h = go.Figure()
         fig_h.add_trace(go.Bar(
             x=df_daily["dt"], 
@@ -541,9 +532,27 @@ elif menu == "収穫実績・分析":
         
         st.markdown("---")
         
-        # 収穫実績一覧表 ＆ 削除機能
+        # 2. 一覧表（並び順：収穫日最新順 ➔ ライン順 ➔ ベッド順）
         st.subheader("2. 収穫実績データ一覧表")
         
+        def extract_line(h_str):
+            if not h_str: return "A"
+            m = re.search(r'\(([A-Z])ライン\)', str(h_str))
+            return m.group(1) if m else "A"
+
+        def extract_bed(b_str):
+            if not b_str: return 0
+            m = re.search(r'(\d+)', str(b_str))
+            return int(m.group(1)) if m else 0
+
+        df_s["sort_line"] = df_s["ハウス"].apply(extract_line)
+        df_s["sort_bed"] = df_s["ベッド"].apply(extract_bed)
+        
+        df_sorted = df_s.sort_values(
+            by=["dt", "sort_line", "sort_bed"], 
+            ascending=[False, True, True]
+        ).reset_index(drop=True)
+
         h1, h2, h3, h4, h5, h6, h7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
         h1.markdown("**収穫日**")
         h2.markdown("**栽培場所**")
@@ -554,7 +563,7 @@ elif menu == "収穫実績・分析":
         h7.markdown("**操作**")
         st.markdown("---")
         
-        for idx, row in df_s.iterrows():
+        for idx, row in df_sorted.iterrows():
             c1, c2, c3, c4, c5, c6, c7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
             d_str = str(row['収穫日'])
             date_fmt = f"{d_str[:4]}/{d_str[4:6]}/{d_str[6:]}" if len(d_str)==8 else d_str
