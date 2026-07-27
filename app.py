@@ -220,26 +220,50 @@ if menu == "ホーム・本日の状況":
         st.checkbox("収穫適期ロットの巡回見回りを行う", key="task3")
 
 # ----------------------------------------------------
-# ② 定植登録
+# ② 定植登録（ライン＆ベッドの複数選択・一括登録に対応！）
 # ----------------------------------------------------
 elif menu == "定植登録":
     st.header("【定植登録フォーム】")
     with st.form("teichaku_form"):
         variety = st.selectbox("品種", ["サンチュ", "サニーレタス", "グリーンカール", "三つ葉"])
         house = st.selectbox("ハウス", ["Ⅰ棟", "Ⅱ棟", "Ⅲ棟", "Ⅳ棟"])
-        line = st.selectbox("ライン", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"])
-        bed = st.selectbox("ベッド", [f"{i}番ベッド" for i in range(1, 21)])
+        
+        # ラインとベッドを複数選択（マルチセレクト）に変更
+        lines = st.multiselect(
+            "ライン (複数選択可)", 
+            ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"],
+            default=["A"]
+        )
+        beds = st.multiselect(
+            "ベッド (複数選択可)", 
+            [f"{i}番ベッド" for i in range(1, 21)],
+            default=["1番ベッド"]
+        )
+        
         plant_date_val = st.date_input("定植日", datetime.now())
-        quantity = st.number_input("株数", min_value=1, value=150)
+        quantity = st.number_input("株数 (1ベッドあたり)", min_value=1, value=150)
         target_size_val = st.number_input("予定収穫サイズ (g)", min_value=1, value=180)
         memo = st.text_area("メモ", "")
         
-        submitted = st.form_submit_button("この内容で登録する")
+        submitted = st.form_submit_button("この内容で一括登録する")
         if submitted:
-            full_house = f"{house} ({line}ライン)"
-            str_plant_date = plant_date_val.strftime("%Y%m%d")
-            insert_teichaku(variety, full_house, bed, str_plant_date, int(quantity), f"{target_size_val}g", memo)
-            st.success("定植データをデータベースに保存しました！")
+            if not lines:
+                st.error("⚠️ ラインを1つ以上選択してください。")
+            elif not beds:
+                st.error("⚠️ ベッドを1つ以上選択してください。")
+            else:
+                str_plant_date = plant_date_val.strftime("%Y%m%d")
+                str_target_size = f"{target_size_val}g"
+                count = 0
+                
+                # 選択された「ライン」×「ベッド」の組み合わせをすべて一括登録
+                for l in lines:
+                    full_house = f"{house} ({l}ライン)"
+                    for b in beds:
+                        insert_teichaku(variety, full_house, b, str_plant_date, int(quantity), str_target_size, memo)
+                        count += 1
+                        
+                st.success(f"🎉 大成功！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を一括登録しました！")
 
 # ----------------------------------------------------
 # ③ 栽培一覧
@@ -413,7 +437,7 @@ elif menu == "AI収穫予測":
             st.success("💡 気象データに基づく全ロットのリアルタイム予測結果です。")
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析（Plotly完全文字化け防止＆インタラクティブ表示）
+# ⑦ 総合グラフ分析
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・環境データ 総合分析ダッシュボード】")
@@ -432,9 +456,6 @@ elif menu == "総合グラフ分析":
         df["dt"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
         df = df.dropna(subset=["dt"]).sort_values("dt").reset_index(drop=True)
         
-        # ------------------------------------------------
-        # 📅 期間選択フィルター
-        # ------------------------------------------------
         st.subheader("📅 表示期間の選択")
         filter_type = st.selectbox(
             "期間プリセット",
@@ -471,10 +492,6 @@ elif menu == "総合グラフ分析":
         if df_filtered.empty:
             st.warning("⚠️ 選択された期間のデータが見つかりません。「今日の環境入力」画面で気象データを一括インポートしてください。")
         else:
-            # ------------------------------------------------
-            # 📈 Plotlyインタラクティブグラフ（100%文字化けなし＆完全日本語表示）
-            # ------------------------------------------------
-            
             # --- グラフ1: 気温・水温 ---
             st.subheader("1. 気温 (最高/平均/最低) と ハウス水温の推移")
             fig1 = go.Figure()
