@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, date
 import requests
 import re
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 from database.db_manager import (
     init_db, 
@@ -493,7 +494,7 @@ elif menu == "AI収穫予測 (栽培管理)":
                     st.rerun()
 
 # ----------------------------------------------------
-# ⑥ 収穫実績・分析（グラフ完全正常化＆1日1本綺麗に集計版）
+# ⑥ 収穫実績・分析（全品目1画面グラフ＆直近1週間限定一覧表）
 # ----------------------------------------------------
 elif menu == "収穫実績・分析":
     st.header("【収穫実績・分析ダッシュボード】")
@@ -502,12 +503,14 @@ elif menu == "収穫実績・分析":
     if not shukaku_logs:
         st.warning("現在登録されている収穫データはありません。「収穫登録」メニューから登録を行ってください。")
     else:
+        # データフレーム化（カラム順序完全固定）
         df_s = pd.DataFrame(shukaku_logs, columns=[
-            "ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時"
+            "ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時", "品種"
         ])
         
         df_s["重量(g)"] = pd.to_numeric(df_s["重量(g)"], errors="coerce").fillna(0.0)
         df_s["重量(kg)"] = df_s["重量(g)"] / 1000.0
+        df_s["品種"] = df_s["品種"].fillna("サンチュ")
         
         # YYYYMMDD -> YYYY-MM-DD
         def format_date(d_val):
@@ -517,87 +520,139 @@ elif menu == "収穫実績・分析":
             return s
             
         df_s["date_fmt"] = df_s["収穫日"].apply(format_date)
+        df_s["dt"] = pd.to_datetime(df_s["date_fmt"], errors="coerce")
         
-        # 1. 日別合計の完全集計（1日＝1本の棒にする）
-        df_daily = df_s.groupby("date_fmt", as_index=False)["重量(kg)"].sum().sort_values("date_fmt")
-        df_daily["display_date"] = df_daily["date_fmt"].apply(lambda x: f"{x[5:7]}/{x[8:10]}" if len(x)==10 else x)
-        
+        # --- 全過去データのCSVダウンロード ---
         st.download_button(
-            label="📥 収穫実績データをCSVダウンロード",
-            data=df_s[["ID", "収穫日", "ハウス", "ベッド", "重量(g)", "品質", "備考", "登録日時"]].to_csv(index=False).encode('utf-8-sig'),
-            file_name=f"sanchu_harvest_records_{datetime.now().strftime('%Y%m%d')}.csv",
+            label="📥 全過去収穫実績データをCSVダウンロード",
+            data=df_s[["ID", "収穫日", "品種", "ハウス", "ベッド", "重量(g)", "品質", "備考", "登録日時"]].to_csv(index=False).encode('utf-8-sig'),
+            file_name=f"sanchu_all_harvest_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
         st.markdown("---")
         
-        st.subheader("1. 日別 収穫総重量の推移 (kg)")
-        fig_h = go.Figure()
-        fig_h.add_trace(go.Bar(
-            x=df_daily["display_date"], 
-            y=df_daily["重量(kg)"], 
-            text=df_daily["重量(kg)"].apply(lambda v: f"{v:.2f} kg"),
-            textposition="outside",
-            name="収穫量(kg)", 
-            marker_color="#4caf50",
-            width=0.35
-        ))
-        fig_h.update_layout(
-            xaxis_title="収穫日", yaxis_title="収穫量 (kg)",
-            hovermode="x unified", template="plotly_dark", height=420,
-            bargap=0.5,
-            xaxis=dict(type="category") # 重複・塗りつぶし完全防止
+        # ------------------------------------------------
+        # 📊 1. 収穫グラフ（品目別・期間選択・全品目1画面統合表示）
+        # ------------------------------------------------
+        st.subheader("1. 品目別 収穫総重量の推移 (kg) [全品目1画面表示]")
+        
+        filter_type_h = st.selectbox(
+            "グラフ表示期間の選択",
+            ["直近30日間", "今月 (2026年7月)", "先月 (2026年6月)", "2026年全期間", "全期間", "日付で直接指定"]
         )
-        st.plotly_chart(fig_h, use_container_width=True)
         
+        today = datetime.now().date()
+        if filter_type_h == "直近30日間":
+            start_h, end_h = today - timedelta(days=30), today
+        elif filter_type_h == "今月 (2026年7月)":
+            start_h, end_h = date(today.year, today.month, 1), today
+        elif filter_type_h == "先月 (2026年6月)":
+            start_h = date(2026, 6, 1)
+            end_h = date(2026, 6, 30)
+        elif filter_type_h == "2026年全期間":
+            start_h, end_h = date(2026, 1, 1), date(2026, 12, 31)
+        elif filter_type_h == "全期間":
+            start_h = df_s["dt"].min().date() if not df_s["dt"].isna().all() else date(2026, 1, 1)
+            end_h = df_s["dt"].max().date() if not df_s["dt"].isna().all() else today
+        else:
+            c1, c2 = st.columns(2)
+            with c1: start_h = st.date_input("開始日", value=today - timedelta(days=30))
+            with c2: end_h = st.date_input("終了日", value=today)
+
+        df_s_filtered = df_s[(df_s["dt"].dt.date >= start_h) & (df_s["dt"].dt.date <= end_h)].copy()
+
+        if df_s_filtered.empty:
+            st.info("指定された期間の収穫データはありません。")
+        else:
+            # 日付×品種ごとに集計
+            df_pv = df_s_filtered.groupby(["date_fmt", "品種"])["重量(kg)"].sum().reset_index()
+            df_pv["display_date"] = df_pv["date_fmt"].apply(lambda x: f"{x[5:7]}/{x[8:10]}" if len(x)==10 else x)
+            
+            # Plotlyで全品目を積み上げ棒グラフとして一画面描画
+            fig_variety = px.bar(
+                df_pv, 
+                x="display_date", 
+                y="重量(kg)", 
+                color="品種",
+                title="■ 品目別・日別収穫量 (kg)",
+                labels={"display_date": "収穫日", "重量(kg)": "収穫重量 (kg)", "品種": "品目"},
+                template="plotly_dark",
+                color_discrete_map={
+                    "サンチュ": "#4caf50",
+                    "サニーレタス": "#e53935",
+                    "グリーンカール": "#00bcd4",
+                    "三つ葉": "#82c91e"
+                }
+            )
+            fig_variety.update_layout(
+                height=420,
+                hovermode="x unified",
+                xaxis=dict(type="category")
+            )
+            st.plotly_chart(fig_variety, use_container_width=True)
+            
         st.markdown("---")
         
-        # 2. 収穫実績一覧表
-        st.subheader("2. 収穫実績データ一覧表")
+        # ------------------------------------------------
+        # 📋 2. 直近1週間（過去7日間）限定の収穫実績データ一覧表
+        # ------------------------------------------------
+        st.subheader("2. 過去1週間（直近7日間）の収穫実績データ一覧表")
+        st.caption("※7日より前の過去データは、最上部の「全過去収穫実績データをCSVダウンロード」ボタンから保存・確認できます。")
         
-        def extract_line(h_str):
-            if not h_str: return "A"
-            m = re.search(r'\(([A-Z])ライン\)', str(h_str))
-            return m.group(1) if m else "A"
-
-        def extract_bed(b_str):
-            if not b_str: return 0
-            m = re.search(r'(\d+)', str(b_str))
-            return int(m.group(1)) if m else 0
-
-        df_s["sort_line"] = df_s["ハウス"].apply(extract_line)
-        df_s["sort_bed"] = df_s["ベッド"].apply(extract_bed)
+        one_week_ago = today - timedelta(days=7)
+        df_1week = df_s[df_s["dt"].dt.date >= one_week_ago].copy()
         
-        df_sorted = df_s.sort_values(
-            by=["date_fmt", "sort_line", "sort_bed"], 
-            ascending=[False, True, True]
-        ).reset_index(drop=True)
+        if df_1week.empty:
+            st.info("過去1週間以内の収穫データはありません。")
+        else:
+            def extract_line(h_str):
+                if not h_str: return "A"
+                m = re.search(r'\(([A-Z])ライン\)', str(h_str))
+                return m.group(1) if m else "A"
 
-        h1, h2, h3, h4, h5, h6, h7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
-        h1.markdown("**収穫日**")
-        h2.markdown("**栽培場所**")
-        h3.markdown("**収穫重量**")
-        h4.markdown("**品質**")
-        h5.markdown("**備考**")
-        h6.markdown("**登録日時**")
-        h7.markdown("**操作**")
-        st.markdown("---")
-        
-        for idx, row in df_sorted.iterrows():
-            c1, c2, c3, c4, c5, c6, c7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
-            d_str = str(row['収穫日'])
-            date_fmt = f"{d_str[:4]}/{d_str[4:6]}/{d_str[6:]}" if len(d_str)==8 else d_str
+            def extract_bed(b_str):
+                if not b_str: return 0
+                m = re.search(r'(\d+)', str(b_str))
+                return int(m.group(1)) if m else 0
+
+            df_1week["sort_line"] = df_1week["ハウス"].apply(extract_line)
+            df_1week["sort_bed"] = df_1week["ベッド"].apply(extract_bed)
             
-            c1.write(date_fmt)
-            c2.write(f"{row['ハウス']} - {row['ベッド']}" if row['ハウス'] else "全体")
-            c3.write(f"{row['重量(g)']} g")
-            c4.write(row['品質'] if row['品質'] else "秀")
-            c5.write(row['備考'] if row['備考'] else "-")
-            c6.write(str(row['登録日時'])[:16] if row['登録日時'] else "-")
+            # 並び順：収穫日最新順 ➔ 品種 ➔ ライン ➔ ベッド
+            df_1week_sorted = df_1week.sort_values(
+                by=["date_fmt", "品種", "sort_line", "sort_bed"], 
+                ascending=[False, True, True, True]
+            ).reset_index(drop=True)
+
+            # 列ラベルの正しく綺麗な表示
+            h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6, 0.7])
+            h1.markdown("**収穫日**")
+            h2.markdown("**品種**")
+            h3.markdown("**栽培場所**")
+            h4.markdown("**収穫重量**")
+            h5.markdown("**品質**")
+            h6.markdown("**備考**")
+            h7.markdown("**登録日時**")
+            h8.markdown("**操作**")
+            st.markdown("---")
             
-            if c7.button("🗑️", key=f"del_shukaku_{row['ID']}", help="この収穫記録を削除"):
-                if delete_record("shukaku", row['ID']):
-                    st.success("削除しました。")
-                    st.rerun()
+            for idx, row in df_1week_sorted.iterrows():
+                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6, 0.7])
+                d_str = str(row['収穫日'])
+                date_fmt = f"{d_str[:4]}/{d_str[4:6]}/{d_str[6:]}" if len(d_str)==8 else d_str
+                
+                c1.write(date_fmt)
+                c2.write(row['品種'])
+                c3.write(f"{row['ハウス']} - {row['ベッド']}" if row['ハウス'] else "全体")
+                c4.write(f"{row['重量(g)']} g")
+                c5.write(row['品質'] if row['品質'] else "秀")
+                c6.write(row['備考'] if row['備考'] else "-")
+                c7.write(str(row['登録日時'])[:16] if row['登録日時'] else "-")
+                
+                if c8.button("🗑️", key=f"del_shukaku_{row['ID']}", help="この収穫記録を削除"):
+                    if delete_record("shukaku", row['ID']):
+                        st.success("削除しました。")
+                        st.rerun()
 
 # ----------------------------------------------------
 # ⑦ 総合グラフ分析
