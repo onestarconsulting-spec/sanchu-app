@@ -494,7 +494,7 @@ elif menu == "AI収穫予測 (栽培管理)":
                     st.rerun()
 
 # ----------------------------------------------------
-# ⑥ 収穫実績・分析（全品目1画面グラフ＆直近1週間限定一覧表）
+# ⑥ 収穫実績・分析（全日付・全品目カレンダー埋めグラフ＆1週間限定表）
 # ----------------------------------------------------
 elif menu == "収穫実績・分析":
     st.header("【収穫実績・分析ダッシュボード】")
@@ -503,7 +503,6 @@ elif menu == "収穫実績・分析":
     if not shukaku_logs:
         st.warning("現在登録されている収穫データはありません。「収穫登録」メニューから登録を行ってください。")
     else:
-        # データフレーム化（カラム順序完全固定）
         df_s = pd.DataFrame(shukaku_logs, columns=[
             "ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時", "品種"
         ])
@@ -512,7 +511,6 @@ elif menu == "収穫実績・分析":
         df_s["重量(kg)"] = df_s["重量(g)"] / 1000.0
         df_s["品種"] = df_s["品種"].fillna("サンチュ")
         
-        # YYYYMMDD -> YYYY-MM-DD
         def format_date(d_val):
             s = str(d_val).strip()
             if len(s) == 8:
@@ -522,7 +520,6 @@ elif menu == "収穫実績・分析":
         df_s["date_fmt"] = df_s["収穫日"].apply(format_date)
         df_s["dt"] = pd.to_datetime(df_s["date_fmt"], errors="coerce")
         
-        # --- 全過去データのCSVダウンロード ---
         st.download_button(
             label="📥 全過去収穫実績データをCSVダウンロード",
             data=df_s[["ID", "収穫日", "品種", "ハウス", "ベッド", "重量(g)", "品質", "備考", "登録日時"]].to_csv(index=False).encode('utf-8-sig'),
@@ -532,9 +529,9 @@ elif menu == "収穫実績・分析":
         st.markdown("---")
         
         # ------------------------------------------------
-        # 📊 1. 収穫グラフ（品目別・期間選択・全品目1画面統合表示）
+        # 📊 1. 収穫グラフ（全日付・全品目 カレンダー網羅型）
         # ------------------------------------------------
-        st.subheader("1. 品目別 収穫総重量の推移 (kg) [全品目1画面表示]")
+        st.subheader("1. 品目別 収穫総重量の推移 (kg) [未収穫日も0kg表示]")
         
         filter_type_h = st.selectbox(
             "グラフ表示期間の選択",
@@ -552,44 +549,51 @@ elif menu == "収穫実績・分析":
         elif filter_type_h == "2026年全期間":
             start_h, end_h = date(2026, 1, 1), date(2026, 12, 31)
         elif filter_type_h == "全期間":
-            start_h = df_s["dt"].min().date() if not df_s["dt"].isna().all() else date(2026, 1, 1)
-            end_h = df_s["dt"].max().date() if not df_s["dt"].isna().all() else today
+            min_d = df_s["dt"].min().date() if not df_s["dt"].isna().all() else date(2026, 1, 1)
+            start_h, end_h = min_d, today
         else:
             c1, c2 = st.columns(2)
             with c1: start_h = st.date_input("開始日", value=today - timedelta(days=30))
             with c2: end_h = st.date_input("終了日", value=today)
 
+        # ★ 指定期間内の全日付グリッドを生成（収穫がない日も0kgで枠を確保）
+        all_days = [start_h + timedelta(days=i) for i in range((end_h - start_h).days + 1)]
+        varieties = ["サンチュ", "サニーレタス", "グリーンカール", "三つ葉"]
+        
+        full_grid = pd.MultiIndex.from_product(
+            [[d.strftime("%Y-%m-%d") for d in all_days], varieties],
+            names=["date_fmt", "品種"]
+        ).to_frame().reset_index(drop=True)
+        
+        # 実際の収穫集計
         df_s_filtered = df_s[(df_s["dt"].dt.date >= start_h) & (df_s["dt"].dt.date <= end_h)].copy()
+        df_pv = df_s_filtered.groupby(["date_fmt", "品種"])["重量(kg)"].sum().reset_index() if not df_s_filtered.empty else pd.DataFrame(columns=["date_fmt", "品種", "重量(kg)"])
+        
+        # 全日付枠に実際のデータを結合（未登録日は0.0kg）
+        df_merged = pd.merge(full_grid, df_pv, on=["date_fmt", "品種"], how="left").fillna({"重量(kg)": 0.0})
+        df_merged["display_date"] = df_merged["date_fmt"].apply(lambda x: f"{x[5:7]}/{x[8:10]}" if len(x)==10 else x)
 
-        if df_s_filtered.empty:
-            st.info("指定された期間の収穫データはありません。")
-        else:
-            # 日付×品種ごとに集計
-            df_pv = df_s_filtered.groupby(["date_fmt", "品種"])["重量(kg)"].sum().reset_index()
-            df_pv["display_date"] = df_pv["date_fmt"].apply(lambda x: f"{x[5:7]}/{x[8:10]}" if len(x)==10 else x)
-            
-            # Plotlyで全品目を積み上げ棒グラフとして一画面描画
-            fig_variety = px.bar(
-                df_pv, 
-                x="display_date", 
-                y="重量(kg)", 
-                color="品種",
-                title="■ 品目別・日別収穫量 (kg)",
-                labels={"display_date": "収穫日", "重量(kg)": "収穫重量 (kg)", "品種": "品目"},
-                template="plotly_dark",
-                color_discrete_map={
-                    "サンチュ": "#4caf50",
-                    "サニーレタス": "#e53935",
-                    "グリーンカール": "#00bcd4",
-                    "三つ葉": "#82c91e"
-                }
-            )
-            fig_variety.update_layout(
-                height=420,
-                hovermode="x unified",
-                xaxis=dict(type="category")
-            )
-            st.plotly_chart(fig_variety, use_container_width=True)
+        fig_variety = px.bar(
+            df_merged, 
+            x="display_date", 
+            y="重量(kg)", 
+            color="品種",
+            title="■ 日別・品目別収穫量 (kg)",
+            labels={"display_date": "収穫日", "重量(kg)": "収穫重量 (kg)", "品種": "品目"},
+            template="plotly_dark",
+            color_discrete_map={
+                "サンチュ": "#4caf50",
+                "サニーレタス": "#e53935",
+                "グリーンカール": "#00bcd4",
+                "三つ葉": "#82c91e"
+            }
+        )
+        fig_variety.update_layout(
+            height=420,
+            hovermode="x unified",
+            xaxis=dict(type="category")
+        )
+        st.plotly_chart(fig_variety, use_container_width=True)
             
         st.markdown("---")
         
@@ -618,13 +622,11 @@ elif menu == "収穫実績・分析":
             df_1week["sort_line"] = df_1week["ハウス"].apply(extract_line)
             df_1week["sort_bed"] = df_1week["ベッド"].apply(extract_bed)
             
-            # 並び順：収穫日最新順 ➔ 品種 ➔ ライン ➔ ベッド
             df_1week_sorted = df_1week.sort_values(
                 by=["date_fmt", "品種", "sort_line", "sort_bed"], 
                 ascending=[False, True, True, True]
             ).reset_index(drop=True)
 
-            # 列ラベルの正しく綺麗な表示
             h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6, 0.7])
             h1.markdown("**収穫日**")
             h2.markdown("**品種**")
