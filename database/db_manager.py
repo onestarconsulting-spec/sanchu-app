@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 def get_connection():
-    """クラウドデータベース(Supabase)へ接続する安全なコネクションを取得"""
+    """クラウドデータベース(Supabase)へ接続するコネクションを取得"""
     return psycopg2.connect(
         host=st.secrets["postgres"]["host"],
         database=st.secrets["postgres"]["database"],
@@ -14,7 +14,7 @@ def get_connection():
     )
 
 def init_db():
-    """テーブルを作成する（クラウド上に自動で作られます）"""
+    """テーブルを作成・拡張する"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -28,15 +28,37 @@ def init_db():
         )
     """)
     
-    # 2. 環境テーブル
+    # 2. 環境・気象データテーブル（気象庁全項目対応）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kankyo (
             id SERIAL PRIMARY KEY,
-            date TEXT, temp REAL, min_temp REAL, max_temp REAL,
+            date TEXT UNIQUE,
+            temp REAL, min_temp REAL, max_temp REAL,
             water_temp REAL, dli REAL, ec REAL, ph REAL, memo TEXT,
+            press_land REAL, press_sea REAL,
+            humidity_mean REAL, humidity_min REAL,
+            wind_speed_mean REAL, wind_speed_max REAL, wind_dir_max TEXT,
+            wind_speed_instant REAL, wind_dir_instant TEXT,
+            sunshine_hours REAL, precip_total REAL, precip_max_1h REAL, precip_max_10m REAL,
+            snow_depth_sum REAL, snow_depth_max REAL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # 既存テーブルへのカラム安全追加（Supabaseの自動拡張）
+    columns = [
+        ("press_land", "REAL"), ("press_sea", "REAL"),
+        ("humidity_mean", "REAL"), ("humidity_min", "REAL"),
+        ("wind_speed_mean", "REAL"), ("wind_speed_max", "REAL"), ("wind_dir_max", "TEXT"),
+        ("wind_speed_instant", "REAL"), ("wind_dir_instant", "TEXT"),
+        ("sunshine_hours", "REAL"), ("precip_total", "REAL"), ("precip_max_1h", "REAL"), ("precip_max_10m", "REAL"),
+        ("snow_depth_sum", "REAL"), ("snow_depth_max", "REAL")
+    ]
+    for col_name, col_type in columns:
+        try:
+            cursor.execute(f"ALTER TABLE kankyo ADD COLUMN IF NOT EXISTS {col_name} {col_type};")
+        except:
+            pass
 
     # 3. 収穫テーブル
     cursor.execute("""
@@ -63,13 +85,33 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     cursor.close()
     conn.close()
 
-def insert_kankyo(date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo):
+def insert_kankyo_full(data_dict):
+    """気象庁データ含めた全項目の一括保存・更新"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO kankyo (date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo))
+        INSERT INTO kankyo (
+            date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo,
+            press_land, press_sea, humidity_mean, humidity_min,
+            wind_speed_mean, wind_speed_max, wind_dir_max, wind_speed_instant, wind_dir_instant,
+            sunshine_hours, precip_total, precip_max_1h, precip_max_10m, snow_depth_sum, snow_depth_max
+        ) VALUES (
+            %(date)s, %(temp)s, %(min_temp)s, %(max_temp)s, %(water_temp)s, %(dli)s, %(ec)s, %(ph)s, %(memo)s,
+            %(press_land)s, %(press_sea)s, %(humidity_mean)s, %(humidity_min)s,
+            %(wind_speed_mean)s, %(wind_speed_max)s, %(wind_dir_max)s, %(wind_speed_instant)s, %(wind_dir_instant)s,
+            %(sunshine_hours)s, %(precip_total)s, %(precip_max_1h)s, %(precip_max_10m)s, %(snow_depth_sum)s, %(snow_depth_max)s
+        )
+        ON CONFLICT (date) DO UPDATE SET
+            temp = EXCLUDED.temp, min_temp = EXCLUDED.min_temp, max_temp = EXCLUDED.max_temp,
+            dli = EXCLUDED.dli, press_land = EXCLUDED.press_land, press_sea = EXCLUDED.press_sea,
+            humidity_mean = EXCLUDED.humidity_mean, humidity_min = EXCLUDED.humidity_min,
+            wind_speed_mean = EXCLUDED.wind_speed_mean, wind_speed_max = EXCLUDED.wind_speed_max,
+            wind_dir_max = EXCLUDED.wind_dir_max, wind_speed_instant = EXCLUDED.wind_speed_instant,
+            wind_dir_instant = EXCLUDED.wind_dir_instant, sunshine_hours = EXCLUDED.sunshine_hours,
+            precip_total = EXCLUDED.precip_total, precip_max_1h = EXCLUDED.precip_max_1h,
+            precip_max_10m = EXCLUDED.precip_max_10m, snow_depth_sum = EXCLUDED.snow_depth_sum,
+            snow_depth_max = EXCLUDED.snow_depth_max;
+    """, data_dict)
     conn.commit()
     cursor.close()
     conn.close()
@@ -81,14 +123,6 @@ def insert_shukaku(shukaku_date, weight, quantity, quality, memo):
         INSERT INTO shukaku (shukaku_date, weight, quantity, quality, memo)
         VALUES (%s, %s, %s, %s, %s)
     """, (shukaku_date, weight, quantity, quality, memo))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-def delete_kankyo_by_date(date_str):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM kankyo WHERE date = %s", (date_str,))
     conn.commit()
     cursor.close()
     conn.close()
@@ -105,7 +139,7 @@ def select_all_teichaku():
 def select_all_kankyo():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM kankyo ORDER BY id DESC")
+    cursor.execute("SELECT * FROM kankyo ORDER BY date DESC")
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -119,24 +153,3 @@ def select_all_shukaku():
     cursor.close()
     conn.close()
     return rows
-
-def export_all_to_excel(output_filename="サンチュ栽培データ.xlsx"):
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT * FROM teichaku ORDER BY id DESC")
-    df_teichaku = pd.DataFrame(cursor.fetchall(), columns=["id", "variety", "house", "bed", "plant_date", "quantity", "target_size", "memo", "created_at"])
-    
-    cursor.execute("SELECT * FROM kankyo ORDER BY id DESC")
-    df_kankyo = pd.DataFrame(cursor.fetchall(), columns=["id", "date", "temp", "min_temp", "max_temp", "water_temp", "dli", "ec", "ph", "memo", "created_at"])
-    
-    cursor.execute("SELECT * FROM shukaku ORDER BY id DESC")
-    df_shukaku = pd.DataFrame(cursor.fetchall(), columns=["id", "shukaku_date", "weight", "quantity", "quality", "memo", "created_at"])
-    
-    cursor.close()
-    conn.close()
-    
-    with pd.ExcelWriter(output_filename, engine="openpyxl") as writer:
-        df_teichaku.to_excel(writer, sheet_name="定植管理", index=False)
-        df_kankyo.to_excel(writer, sheet_name="環境データ", index=False)
-        df_shukaku.to_excel(writer, sheet_name="収穫実績", index=False)
