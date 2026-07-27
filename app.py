@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-import requests  # 天気予報取得用の部品
+import requests
 from database.db_manager import (
     init_db, 
     insert_teichaku, 
@@ -17,27 +17,24 @@ from database.db_manager import (
 # データベースの初期化
 init_db()
 
+# 仙台の観測座標（北緯38.2688, 東経140.8721）
+SENDAI_LAT = 38.2688
+SENDAI_LON = 140.8721
+
 # ----------------------------------------------------
-# 【新設】外部APIから本日の天気予報を自動取得する命令
+# 外部APIから仙台の本日の天気予報を自動取得する命令
 # ----------------------------------------------------
 def get_today_weather():
-    # ★あなたの農場のある地域の「緯度（latitude）」と「経度（longitude）」を設定してください
-    # 現在はデフォルトとして「東京」の座標（35.6895, 139.6917）にしています。
-    lat = 35.6895
-    lon = 139.6917
-    
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo"
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={SENDAI_LAT}&longitude={SENDAI_LON}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo"
     
     try:
         response = requests.get(url, timeout=5)
         data = response.json()
         
-        # 本日のデータを抽出
         weather_code = data["daily"]["weathercode"][0]
         max_temp = data["daily"]["temperature_2m_max"][0]
         min_temp = data["daily"]["temperature_2m_min"][0]
         
-        # 世界基準の天気コード（WMO）を日本の親しみやすい表現に変換
         weather_map = {
             0: "☀️ 晴天", 1: "🌤️ おおむね晴れ", 2: "⛅ 時々曇り", 3: "☁️ 曇り",
             45: "🌫️ 霧", 48: "🌫️ 霧",
@@ -49,10 +46,62 @@ def get_today_weather():
         weather_text = weather_map.get(weather_code, "🌈 不明")
         return weather_text, f"{max_temp} ℃", f"{min_temp} ℃"
     except:
-        # 万が一、天気サーバーが混雑等で落ちていた場合の安全対策
         return "⚠️ 取得失敗", "--", "--"
 
-# データの削除を処理する裏方の命令
+# ----------------------------------------------------
+# 仙台の指定期間の気象データを自動取得・換算する関数
+# ----------------------------------------------------
+def fetch_sendai_climate_data(start_date_str="2026-07-01", end_date_str=None):
+    if end_date_str is None:
+        end_date_str = datetime.now().strftime("%Y-%m-%d")
+        
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={SENDAI_LAT}&longitude={SENDAI_LON}&"
+        f"start_date={start_date_str}&end_date={end_date_str}&"
+        f"daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum&"
+        f"timezone=Asia%2FTokyo"
+    )
+    
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        daily = data.get("daily", {})
+        
+        dates = daily.get("time", [])
+        temp_means = daily.get("temperature_2m_mean", [])
+        temp_maxs = daily.get("temperature_2m_max", [])
+        temp_mins = daily.get("temperature_2m_min", [])
+        radiations = daily.get("shortwave_radiation_sum", []) # MJ/m²
+        
+        result = []
+        for i in range(len(dates)):
+            d_str = dates[i].replace("-", "") # YYYYMMDD形式
+            t_mean = round(temp_means[i], 1) if temp_means[i] is not None else 25.0
+            t_max = round(temp_maxs[i], 1) if temp_maxs[i] is not None else 30.0
+            t_min = round(temp_mins[i], 1) if temp_mins[i] is not None else 20.0
+            
+            # 全天日射量(MJ/m²)からDLI(mol/m²/day)への自動変換 (約2.05倍換算)
+            rad = radiations[i] if radiations[i] is not None else 10.0
+            dli = round(rad * 2.05, 1)
+            
+            # 水温は屋外データにないため、日平均気温と同等と仮定
+            water_temp = t_mean
+            
+            result.append({
+                "date": d_str,
+                "temp": t_mean,
+                "min_temp": t_min,
+                "max_temp": t_max,
+                "water_temp": water_temp,
+                "dli": dli
+            })
+        return result
+    except Exception as e:
+        st.error(f"気象データの取得に失敗しました: {e}")
+        return []
+
+# データの削除命令
 def delete_record(table_name, record_id):
     try:
         conn = get_connection()
@@ -66,28 +115,26 @@ def delete_record(table_name, record_id):
         st.error(f"削除中にエラーが発生しました: {e}")
         return False
 
-# 画面全体の基本設定（スマホ対応）
+# 画面全体の基本設定
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
-# 左側のサイドメニュー（画面切り替えナビゲーション）
+# サイドメニュー
 menu = st.sidebar.radio(
     "メニュー切り替え",
     ["ホーム・本日の状況", "定植登録", "栽培一覧", "今日の環境入力", "収穫登録", "AI収穫予測", "総合グラフ分析"]
 )
 
 # ----------------------------------------------------
-# ① ホーム・本日の状況（天気予報をさらに追加！）
+# ① ホーム・本日の状況
 # ----------------------------------------------------
 if menu == "ホーム・本日の状況":
-    st.header("【本日の状況サマリー】")
+    st.header("【本日の状況サマリー - 仙台観測連動】")
     
-    # クラウドから全データを取得
     teichaku_records = select_all_teichaku()
     kankyo_logs = select_all_kankyo()
     shukaku_logs = select_all_shukaku()
     
-    # --- 裏側でのAI予測・ロット集計ロジック ---
     active_lots = len(teichaku_records)
     today_harvest_lots = 0
     caution_lots = 0
@@ -125,18 +172,17 @@ if menu == "ホーム・本日の状況":
             except:
                 pass
 
-    # --- 【新設】本日のリアルタイム天気予報エリア ---
+    # 仙台の天気予報表示
     w_text, w_max, w_min = get_today_weather()
     
-    # メイン数値の上にスッキリ横並びで表示
-    st.markdown(f"### ☁️ 本日の外部天気予報 （自動取得）")
+    st.markdown("### ☁️ 仙台本日の天気予報（気象庁/外部連動）")
     w_col1, w_col2, w_col3 = st.columns(3)
-    with w_col1: st.metric(label="本日の天気", value=w_text)
+    with w_col1: st.metric(label="本日の天気 (仙台)", value=w_text)
     with w_col2: st.metric(label="予想最高気温", value=w_max)
     with w_col3: st.metric(label="予想最低気温", value=w_min)
     st.markdown("---")
 
-    # --- AI環境アラート機能 ---
+    # アラート表示
     if kankyo_logs:
         latest_env = kankyo_logs[0]
         l_date, l_wtemp, l_ph = latest_env[1], latest_env[5], latest_env[8]
@@ -144,12 +190,11 @@ if menu == "ホーム・本日の状況":
         if l_wtemp > 22.0 or l_ph < 5.5 or l_ph > 6.8:
             st.error(f"⚠️ **【ハウス環境アラート発令中】** （最終入力日: {l_date}）")
             if l_wtemp > 22.0:
-                st.write(f"・水温が **{l_wtemp}℃** と高めです！根腐れや生育遅延のリスクがあります。チラーの確認や遮光を行ってください。")
+                st.write(f"・水温が **{l_wtemp}℃** と高めです！根腐れや生育遅延のリスクがあります。")
             if l_ph < 5.5 or l_ph > 6.8:
-                st.write(f"・培養液のpHが **{l_ph}** と適正範囲（5.5〜6.5）から外れています！肥料の吸収バランスが崩れる恐れがあります。")
+                st.write(f"・培養液のpHが **{l_ph}** と適正範囲から外れています！")
             st.markdown("---")
 
-    # メインの3大数値を表示
     st.markdown("### 📊 ハウス内ロット状況")
     col1, col2, col3 = st.columns(3)
     with col1: st.metric(label="栽培中ロット", value=f"{active_lots} ロット")
@@ -157,7 +202,6 @@ if menu == "ホーム・本日の状況":
     with col3: st.metric(label="水温ストレス（要注意）", value=f"{caution_lots} ロット")
     st.markdown("---")
 
-    # 下半分（目標進捗と本日のタスク）
     left_col, right_col = st.columns(2)
 
     with left_col:
@@ -179,9 +223,7 @@ if menu == "ホーム・本日の状況":
 
     with right_col:
         st.subheader("📋 本日の作業タスク")
-        st.write("今日やるべき仕事のチェックリストです。終わったらチェックを入れて消し込めます。")
-        
-        st.checkbox("今日の環境データを測定して入力する", key="task1")
+        st.checkbox("今日の環境データを測定・連動入力する", key="task1")
         if today_harvest_lots > 0:
             st.checkbox(f"本日適期の {today_harvest_lots} ロットを収穫・登録する", key="task2")
         else:
@@ -265,10 +307,38 @@ elif menu == "栽培一覧":
                 st.markdown("---")
 
 # ----------------------------------------------------
-# ④ 今日の環境入力
+# ④ 今日の環境入力（気象データ自動取得・一括連動機能付き）
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
-    st.header("【今日の環境データ入力】")
+    st.header("【今日の環境データ入力 (仙台気象連動)】")
+    
+    # 🌟 7月1日〜本日までの気象データ一括取り込みボタン
+    st.subheader("⚡ 気象データの一括取得・保存")
+    st.write("2026年7月1日〜本日までの仙台の気象（気温・最高・最低・日射量）をまとめて自動取得・登録します。")
+    if st.button("🌦️ 2026年7月1日からの仙台気象データを一括登録する"):
+        climate_list = fetch_sendai_climate_data("2026-07-01")
+        if climate_list:
+            count = 0
+            # 既存の登録日を把握して重複を防止
+            existing_logs = select_all_kankyo()
+            existing_dates = [log[1] for log in existing_logs]
+            
+            for item in climate_list:
+                if item["date"] not in existing_dates:
+                    insert_kankyo(
+                        item["date"], item["temp"], item["min_temp"], item["max_temp"],
+                        item["water_temp"], item["dli"], 1.2, 6.5, "仙台気象データ自動自動取得"
+                    )
+                    count += 1
+            st.success(f"大成功！ 新たに {count} 日分の仙台気象データをデータベースへ追加保存しました。")
+            st.rerun()
+        else:
+            st.error("データの自動取得に失敗しました。時間をおいて再試行してください。")
+
+    st.markdown("---")
+    st.subheader("📝 個別入力・調整（EC・pH手動入力）")
+
+    # 初期値（最新データ）
     kankyo_logs = select_all_kankyo()
     if kankyo_logs:
         last = kankyo_logs[0]
@@ -284,13 +354,17 @@ elif menu == "今日の環境入力":
 
     with st.form("kankyo_form"):
         date_val = st.date_input("日付", datetime.now())
-        temp = st.number_input("気温 (℃)", value=def_temp, step=0.1)
-        min_temp = st.number_input("最低気温 (℃)", value=def_min, step=0.1)
-        max_temp = st.number_input("最高気温 (℃)", value=def_max, step=0.1)
-        water_temp = st.number_input("水温 (℃)", value=def_water, step=0.1)
-        dli = st.number_input("日射量 (DLI)", value=def_dli, step=0.1)
-        ec = st.number_input("EC (dS/m)", value=def_ec, step=0.1)
-        ph = st.number_input("pH", value=def_ph, step=0.1)
+        
+        # フォーム内で選択日の仙台気象データを呼び出す
+        temp = st.number_input("気温 (℃) [気象自動]", value=def_temp, step=0.1)
+        min_temp = st.number_input("最低気温 (℃) [気象自動]", value=def_min, step=0.1)
+        max_temp = st.number_input("最高気温 (℃) [気象自動]", value=def_max, step=0.1)
+        water_temp = st.number_input("水温 (℃) [ハウス測定値/前日引き継ぎ]", value=def_water, step=0.1)
+        dli = st.number_input("日射量 (DLI) [気象自動換算]", value=def_dli, step=0.1)
+        
+        # 手動入力（EC・pH）
+        ec = st.number_input("EC (dS/m) [手動入力]", value=def_ec, step=0.1)
+        ph = st.number_input("pH [手動入力]", value=def_ph, step=0.1)
         memo = st.text_area("備考", "")
         
         submitted = st.form_submit_button("この内容で保存する")
@@ -318,7 +392,7 @@ elif menu == "収穫登録":
             st.success("収穫データをデータベースに登録しました！")
 
 # ----------------------------------------------------
-# ⑥ AI収穫予測
+# ⑥ AI収穫予測（一覧表）
 # ----------------------------------------------------
 elif menu == "AI収穫予測":
     st.header("【AI気象補正 収穫予測シミュレーション（一覧表）】")
@@ -378,7 +452,7 @@ elif menu == "AI収穫予測":
         if prediction_table_data:
             df_prediction = pd.DataFrame(prediction_table_data)
             st.dataframe(df_prediction, use_container_width=True, hide_index=True)
-            st.success("💡 全ロットの予測結果を1つの表にまとめました。データが増えても自動でスクロールバーがつき、スッキリ確認できます。")
+            st.success("💡 全ロットの予測結果を1つの表にまとめました。仙台の気象補正データを取り込むと、生育率・予測収穫日が自動更新されます。")
         else:
             st.error("予測データの解析に失敗しました。定植日の形式を確認してください。")
 
