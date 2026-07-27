@@ -24,6 +24,15 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
+# 0. 収穫データから重量(g)を安全に抽出するヘルパー関数
+# ----------------------------------------------------
+def get_weight_from_log(log):
+    for val in log[2:]:
+        if isinstance(val, (int, float)) and val > 0:
+            return float(val)
+    return 0.0
+
+# ----------------------------------------------------
 # 1. 本日の天気予報取得
 # ----------------------------------------------------
 def get_today_weather():
@@ -208,7 +217,6 @@ if menu == "ホーム・本日の状況":
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         this_month_str = datetime.now().strftime("%Y%m")
         
-        # log[4]が重量(g)
         current_weight_g = sum([float(log[4]) for log in shukaku_logs if str(log[1]).startswith(this_month_str) and log[4] is not None])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
@@ -485,7 +493,7 @@ elif menu == "AI収穫予測 (栽培管理)":
                     st.rerun()
 
 # ----------------------------------------------------
-# ⑥ 収穫実績・分析（完全100%カラムズレ解消版）
+# ⑥ 収穫実績・分析（グラフ完全正常化＆1日1本綺麗に集計版）
 # ----------------------------------------------------
 elif menu == "収穫実績・分析":
     st.header("【収穫実績・分析ダッシュボード】")
@@ -494,18 +502,25 @@ elif menu == "収穫実績・分析":
     if not shukaku_logs:
         st.warning("現在登録されている収穫データはありません。「収穫登録」メニューから登録を行ってください。")
     else:
-        # 正しい順序（ID, 収穫日, ハウス, ベッド, 重量, 株数, 品質, 備考, 登録日時）でDataFrame作成
         df_s = pd.DataFrame(shukaku_logs, columns=[
             "ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時"
         ])
         
-        # 数値・日付変換
-        df_s["dt"] = pd.to_datetime(df_s["収穫日"].astype(str), format="%Y%m%d", errors="coerce")
         df_s["重量(g)"] = pd.to_numeric(df_s["重量(g)"], errors="coerce").fillna(0.0)
         df_s["重量(kg)"] = df_s["重量(g)"] / 1000.0
         
-        # 1. 日別集計（グラフ用）
-        df_daily = df_s.groupby("dt")["重量(kg)"].sum().reset_index()
+        # YYYYMMDD -> YYYY-MM-DD
+        def format_date(d_val):
+            s = str(d_val).strip()
+            if len(s) == 8:
+                return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+            return s
+            
+        df_s["date_fmt"] = df_s["収穫日"].apply(format_date)
+        
+        # 1. 日別合計の完全集計（1日＝1本の棒にする）
+        df_daily = df_s.groupby("date_fmt", as_index=False)["重量(kg)"].sum().sort_values("date_fmt")
+        df_daily["display_date"] = df_daily["date_fmt"].apply(lambda x: f"{x[5:7]}/{x[8:10]}" if len(x)==10 else x)
         
         st.download_button(
             label="📥 収穫実績データをCSVダウンロード",
@@ -518,21 +533,25 @@ elif menu == "収穫実績・分析":
         st.subheader("1. 日別 収穫総重量の推移 (kg)")
         fig_h = go.Figure()
         fig_h.add_trace(go.Bar(
-            x=df_daily["dt"], 
+            x=df_daily["display_date"], 
             y=df_daily["重量(kg)"], 
+            text=df_daily["重量(kg)"].apply(lambda v: f"{v:.2f} kg"),
+            textposition="outside",
             name="収穫量(kg)", 
-            marker_color="#4caf50"
+            marker_color="#4caf50",
+            width=0.35
         ))
         fig_h.update_layout(
             xaxis_title="収穫日", yaxis_title="収穫量 (kg)",
-            hovermode="x unified", template="plotly_dark", height=380,
-            xaxis=dict(tickformat="%m/%d")
+            hovermode="x unified", template="plotly_dark", height=420,
+            bargap=0.5,
+            xaxis=dict(type="category") # 重複・塗りつぶし完全防止
         )
         st.plotly_chart(fig_h, use_container_width=True)
         
         st.markdown("---")
         
-        # 2. 一覧表（並び順：収穫日最新順 ➔ ライン順 ➔ ベッド順）
+        # 2. 収穫実績一覧表
         st.subheader("2. 収穫実績データ一覧表")
         
         def extract_line(h_str):
@@ -549,7 +568,7 @@ elif menu == "収穫実績・分析":
         df_s["sort_bed"] = df_s["ベッド"].apply(extract_bed)
         
         df_sorted = df_s.sort_values(
-            by=["dt", "sort_line", "sort_bed"], 
+            by=["date_fmt", "sort_line", "sort_bed"], 
             ascending=[False, True, True]
         ).reset_index(drop=True)
 
