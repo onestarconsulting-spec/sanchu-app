@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
 import requests
+import re
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from database.db_manager import (
@@ -126,9 +127,10 @@ def delete_record(table_name, record_id):
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
+# 重複していた「栽培一覧」を削除し、メニューをシンプルに統合
 menu = st.sidebar.radio(
     "メニュー切り替え",
-    ["ホーム・本日の状況", "定植登録", "栽培一覧", "今日の環境入力", "収穫登録", "AI収穫予測", "総合グラフ分析"]
+    ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "総合グラフ分析"]
 )
 
 # ----------------------------------------------------
@@ -220,15 +222,13 @@ if menu == "ホーム・本日の状況":
         st.checkbox("収穫適期ロットの巡回見回りを行う", key="task3")
 
 # ----------------------------------------------------
-# ② 定植登録（ライン＆ベッドの複数選択・一括登録に対応！）
+# ② 定植登録
 # ----------------------------------------------------
 elif menu == "定植登録":
     st.header("【定植登録フォーム】")
     with st.form("teichaku_form"):
         variety = st.selectbox("品種", ["サンチュ", "サニーレタス", "グリーンカール", "三つ葉"])
         house = st.selectbox("ハウス", ["Ⅰ棟", "Ⅱ棟", "Ⅲ棟", "Ⅳ棟"])
-        
-        # ラインとベッドを複数選択（マルチセレクト）に変更
         lines = st.multiselect(
             "ライン (複数選択可)", 
             ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"],
@@ -239,7 +239,6 @@ elif menu == "定植登録":
             [f"{i}番ベッド" for i in range(1, 21)],
             default=["1番ベッド"]
         )
-        
         plant_date_val = st.date_input("定植日", datetime.now())
         quantity = st.number_input("株数 (1ベッドあたり)", min_value=1, value=150)
         target_size_val = st.number_input("予定収穫サイズ (g)", min_value=1, value=180)
@@ -255,54 +254,15 @@ elif menu == "定植登録":
                 str_plant_date = plant_date_val.strftime("%Y%m%d")
                 str_target_size = f"{target_size_val}g"
                 count = 0
-                
-                # 選択された「ライン」×「ベッド」の組み合わせをすべて一括登録
                 for l in lines:
                     full_house = f"{house} ({l}ライン)"
                     for b in beds:
                         insert_teichaku(variety, full_house, b, str_plant_date, int(quantity), str_target_size, memo)
                         count += 1
-                        
                 st.success(f"🎉 大成功！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を一括登録しました！")
 
 # ----------------------------------------------------
-# ③ 栽培一覧
-# ----------------------------------------------------
-elif menu == "栽培一覧":
-    st.header("【現在栽培中のロット一覧】")
-    records = select_all_teichaku()
-    if not records:
-        st.warning("現在栽培中のデータはありません。")
-    else:
-        df_teichaku = pd.DataFrame(records)
-        st.download_button(
-            label="📥 定植一覧データをCSVダウンロード",
-            data=df_teichaku.to_csv(index=False).encode('utf-8-sig'),
-            file_name=f"sanchu_lots_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-        st.markdown("---")
-        for record in records:
-            record_id, variety, house, bed, plant_date, quantity, target_size = record[0], record[1], record[2], record[3], record[4], record[5], record[6]
-            clean_date = plant_date.strip().replace("/", "").replace("-", "")
-            try:
-                elapsed_days = max(0, (datetime.now() - datetime.strptime(clean_date, "%Y%m%d")).days)
-            except:
-                elapsed_days = "ーー"
-                
-            with st.container():
-                st.markdown(f"### 📍 {house} - {bed} （{variety}）")
-                col1, col2, col3 = st.columns([2, 1, 1])
-                with col1: st.write(f"🌱 株数: {quantity}株  /  📅 定植日: {plant_date}  /  🎯 予定サイズ: {target_size}")
-                with col2: st.success(f"定植 {elapsed_days} 日目")
-                with col3:
-                    if st.button("🗑️ 削除", key=f"del_lot_{record_id}"):
-                        if delete_record("teichaku", record_id):
-                            st.rerun()
-                st.markdown("---")
-
-# ----------------------------------------------------
-# ④ 今日の環境入力
+# ③ 今日の環境入力
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
     st.header("【環境・気象データ入力 (仙台気象連動)】")
@@ -358,7 +318,7 @@ elif menu == "今日の環境入力":
                 st.success("指定日のデータを更新保存しました！")
 
 # ----------------------------------------------------
-# ⑤ 収穫登録
+# ④ 収穫登録
 # ----------------------------------------------------
 elif menu == "収穫登録":
     st.header("【収穫データ登録】")
@@ -375,21 +335,32 @@ elif menu == "収穫登録":
             st.success("収穫データを保存しました！")
 
 # ----------------------------------------------------
-# ⑥ AI収穫予測
+# ⑤ AI収穫予測 (栽培管理・ソート・削除・CSV機能付き)
 # ----------------------------------------------------
-elif menu == "AI収穫予測":
-    st.header("【AI気象補正 収穫予測シミュレーション】")
+elif menu == "AI収穫予測 (栽培管理)":
+    st.header("【AI気象補正 収穫予測・栽培管理テーブル】")
     teichaku_records = select_all_teichaku()
     kankyo_logs = select_all_kankyo()
     
     if not teichaku_records:
-        st.warning("予測対象となる定植データがありません。")
+        st.warning("現在栽培中のロットデータがありません。「定植登録」から追加してください。")
     else:
+        # CSVダウンロードボタンを最上部に設置
+        df_export = pd.DataFrame(teichaku_records, columns=["ID", "品種", "ハウス", "ベッド", "定植日", "株数", "予定サイズ", "メモ", "登録日時"])
+        st.download_button(
+            label="📥 全栽培ロットデータをCSVダウンロード",
+            data=df_export.to_csv(index=False).encode('utf-8-sig'),
+            file_name=f"sanchu_active_lots_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+        st.markdown("---")
+
         kankyo_dict = {log[1]: {"temp": log[2], "water_temp": log[5], "dli": log[6]} for log in kankyo_logs}
-        prediction_table_data = []
+        lots_data = []
         
+        # 1. 各ロットのAI計算＆ソート用キーの解析
         for record in teichaku_records:
-            variety, house, bed, plant_date, quantity, target_size = record[1], record[2], record[3], record[4], record[5], record[6]
+            rec_id, variety, house, bed, plant_date, quantity, target_size = record[0], record[1], record[2], record[3], record[4], record[5], record[6]
             clean_date = plant_date.strip().replace("/", "").replace("-", "")
             
             try:
@@ -412,7 +383,8 @@ elif menu == "AI収穫予測":
                     
                 current_growth_rate = min(100.0, total_growth)
                 remaining_days = max(0, int((100.0 - current_growth_rate) / (100.0 / 30.0)))
-                predicted_date = (datetime.now() + timedelta(days=remaining_days)).strftime("%Y年%m月%d日")
+                predicted_date_dt = datetime.now() + timedelta(days=remaining_days)
+                predicted_date_str = predicted_date_dt.strftime("%Y年%m月%d日")
                 
                 try:
                     target_weight = float(''.join(filter(str.isdigit, target_size)))
@@ -420,24 +392,71 @@ elif menu == "AI収穫予測":
                     target_weight = 180.0
                 current_weight = int(target_weight * (current_growth_rate / 100.0))
                 
-                prediction_table_data.append({
-                    "栽培場所": f"{house} - {bed}",
-                    "品種": variety,
-                    "登録株数": f"{quantity}株",
-                    "AI生育率": f"{current_growth_rate:.1f} %",
-                    "推定重量": f"{current_weight} g",
-                    "予測収穫日": predicted_date,
-                    "収穫適期まで": f"あと {remaining_days} 日"
+                # --- ソート用のキー抽出 ---
+                # ライン文字 (A〜T)
+                line_match = re.search(r'\(([A-Z])ライン\)', house)
+                line_code = line_match.group(1) if line_match else "A"
+                
+                # ベッド番号 (数値 1〜20)
+                bed_match = re.search(r'(\d+)', bed)
+                bed_num = int(bed_match.group(1)) if bed_match else 0
+                
+                lots_data.append({
+                    "id": rec_id,
+                    "location": f"{house} - {bed}",
+                    "variety": variety,
+                    "quantity": f"{quantity}株",
+                    "growth_rate": f"{current_growth_rate:.1f} %",
+                    "weight": f"{current_weight} g",
+                    "pred_date": predicted_date_str,
+                    "rem_days_str": f"あと {remaining_days} 日",
+                    # ソートキー用
+                    "sort_rem_days": remaining_days,
+                    "sort_line": line_code,
+                    "sort_bed": bed_num
                 })
             except:
                 pass
         
-        if prediction_table_data:
-            st.dataframe(pd.DataFrame(prediction_table_data), use_container_width=True, hide_index=True)
-            st.success("💡 気象データに基づく全ロットのリアルタイム予測結果です。")
+        # 2. 指定通りの多重ソート実行（①残日数昇順 ➔ ②ライン順 ➔ ③ベッド番号順）
+        lots_data.sort(key=lambda x: (x["sort_rem_days"], x["sort_line"], x["sort_bed"]))
+
+        # 3. テーブルヘッダーの描画（レスポンシブ配置）
+        h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7, h_col8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
+        h_col1.markdown("**栽培場所**")
+        h_col2.markdown("**品種**")
+        h_col3.markdown("**株数**")
+        h_col4.markdown("**AI生育率**")
+        h_col5.markdown("**推定重量**")
+        h_col6.markdown("**予測収穫日**")
+        h_col7.markdown("**適期まで**")
+        h_col8.markdown("**操作**")
+        st.markdown("---")
+
+        # 4. 各ロットのデータをソート順通りに1行ずつ描画 ＋ 削除ボタン設置
+        for lot in lots_data:
+            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
+            c1.write(lot["location"])
+            c2.write(lot["variety"])
+            c3.write(lot["quantity"])
+            c4.write(lot["growth_rate"])
+            c5.write(lot["weight"])
+            c6.write(lot["pred_date"])
+            
+            # あと0日の場合は緑で強調
+            if lot["sort_rem_days"] == 0:
+                c7.markdown(f":green[**{lot['rem_days_str']}**]")
+            else:
+                c7.write(lot["rem_days_str"])
+                
+            # 各行に配置した削除ボタン
+            if c8.button("🗑️", key=f"del_pred_{lot['id']}", help="このロットを削除"):
+                if delete_record("teichaku", lot["id"]):
+                    st.success("削除しました。")
+                    st.rerun()
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析
+# ⑥ 総合グラフ分析
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・環境データ 総合分析ダッシュボード】")
