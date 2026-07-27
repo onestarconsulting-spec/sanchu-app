@@ -59,17 +59,17 @@ def init_db():
         except:
             pass
 
-    # 3. 収穫テーブル
+    # 3. 収穫テーブル（品種カラムを追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
             id SERIAL PRIMARY KEY,
             shukaku_date TEXT, house TEXT, bed TEXT, weight REAL, quantity INTEGER,
-            quality TEXT, memo TEXT,
+            quality TEXT, memo TEXT, variety TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
-    for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT")]:
+    for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT"), ("variety", "TEXT")]:
         try:
             cursor.execute(f"ALTER TABLE shukaku ADD COLUMN IF NOT EXISTS {c_name} {c_type};")
         except:
@@ -135,11 +135,18 @@ def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality,
     conn = get_connection()
     cursor = conn.cursor()
     
-    cursor.execute("""
-        INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (shukaku_date, house, bed, weight, 0, quality, memo))
+    # 該当ベッドの品種(variety)を定植テーブルから取得
+    cursor.execute("SELECT variety FROM teichaku WHERE house = %s AND bed = %s ORDER BY id DESC LIMIT 1;", (house, bed))
+    row = cursor.fetchone()
+    variety = row[0] if row and row[0] else "サンチュ"
     
+    # 1. 収穫テーブルへ保存（品種付き）
+    cursor.execute("""
+        INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo, variety)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (shukaku_date, house, bed, weight, 0, quality, memo, variety))
+    
+    # 2. 定植テーブルから自動消去
     cursor.execute("""
         DELETE FROM teichaku 
         WHERE house = %s AND bed = %s;
@@ -167,12 +174,11 @@ def select_all_kankyo():
     conn.close()
     return rows
 
-# カラム順序を絶対固定で取得する（ズレ防止）
 def select_all_shukaku():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, shukaku_date, house, bed, weight, quantity, quality, memo, created_at 
+        SELECT id, shukaku_date, house, bed, weight, quantity, quality, memo, created_at, variety 
         FROM shukaku 
         ORDER BY id DESC
     """)
