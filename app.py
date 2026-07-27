@@ -24,6 +24,16 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
+# 0. 収穫データから重量(g)を安全に抽出するヘルパー関数
+# ----------------------------------------------------
+def get_weight_from_log(log):
+    """古いデータ構造と新しいデータ構造の両方に対応して重量(g)を抽出"""
+    for val in log[2:]:  # IDと日付以降の要素をスキャン
+        if isinstance(val, (int, float)) and val > 0:
+            return float(val)
+    return 0.0
+
+# ----------------------------------------------------
 # 1. 本日の天気予報取得
 # ----------------------------------------------------
 def get_today_weather():
@@ -207,7 +217,9 @@ if menu == "ホーム・本日の状況":
         st.subheader("📊 今月の目標収穫量と進捗")
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         this_month_str = datetime.now().strftime("%Y%m")
-        current_weight_g = sum([log[4] for log in shukaku_logs if log[1].startswith(this_month_str) and len(log) > 4 and log[4] is not None])
+        
+        # 安全な数値抽出で今月の収穫総重量を算出
+        current_weight_g = sum([get_weight_from_log(log) for log in shukaku_logs if log[1].startswith(this_month_str)])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
         
@@ -317,7 +329,7 @@ elif menu == "今日の環境入力":
                 st.success("指定日のデータを更新保存しました！")
 
 # ----------------------------------------------------
-# ④ 収穫登録（一括登録対応・株数廃止・栽培管理自動連動）
+# ④ 収穫登録
 # ----------------------------------------------------
 elif menu == "収穫登録":
     st.header("【収穫データ登録】")
@@ -360,7 +372,7 @@ elif menu == "収穫登録":
                 st.success(f"🎉 収穫完了！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を収穫登録し、AI収穫予測表から自動消去しました！")
 
 # ----------------------------------------------------
-# ⑤ AI収穫予測 (精度自動フィードバック補正付き)
+# ⑤ AI収穫予測 (型安全キャリブレーション機能付き)
 # ----------------------------------------------------
 elif menu == "AI収穫予測 (栽培管理)":
     st.header("【AI気象補正 収穫予測・栽培管理テーブル】")
@@ -368,14 +380,12 @@ elif menu == "AI収穫予測 (栽培管理)":
     kankyo_logs = select_all_kankyo()
     shukaku_logs = select_all_shukaku()
     
-    # --- 【AI精度自動補正ロジック】 ---
-    # 過去の収穫実績データから、AI予測値に対する実際の収量の比率（精度倍率）を算出
+    # --- 【AI精度自動補正ロジック（安全数値抽出）】 ---
     yield_accuracy_factor = 1.0
     if shukaku_logs:
-        valid_weights = [log[4] for log in shukaku_logs if len(log) > 4 and log[4] is not None and log[4] > 0]
+        valid_weights = [get_weight_from_log(log) for log in shukaku_logs if get_weight_from_log(log) > 0]
         if valid_weights:
             avg_actual = sum(valid_weights) / len(valid_weights)
-            # 標準基準180gとの比較補正
             yield_accuracy_factor = round(avg_actual / 180.0, 2)
             if yield_accuracy_factor < 0.5: yield_accuracy_factor = 0.5
             if yield_accuracy_factor > 1.5: yield_accuracy_factor = 1.5
@@ -429,7 +439,6 @@ elif menu == "AI収穫予測 (栽培管理)":
                 except:
                     target_weight = 180.0
                 
-                # 収穫実績精度補正率を推定重量に反映
                 current_weight = int(target_weight * (current_growth_rate / 100.0) * yield_accuracy_factor)
                 
                 line_match = re.search(r'\(([A-Z])ライン\)', house)
