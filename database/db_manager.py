@@ -45,7 +45,6 @@ def init_db():
         )
     """)
 
-    # カラムの安全な自動追加
     columns = [
         ("press_land", "REAL"), ("press_sea", "REAL"),
         ("humidity_mean", "REAL"), ("humidity_min", "REAL"),
@@ -60,7 +59,7 @@ def init_db():
         except:
             pass
 
-    # 3. 収穫テーブル（ハウス・ベッド情報を追加）
+    # 3. 収穫テーブル
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
             id SERIAL PRIMARY KEY,
@@ -70,7 +69,6 @@ def init_db():
         )
     """)
     
-    # shukakuテーブルのカラム拡張
     for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT")]:
         try:
             cursor.execute(f"ALTER TABLE shukaku ADD COLUMN IF NOT EXISTS {c_name} {c_type};")
@@ -93,7 +91,6 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     conn.close()
 
 def insert_kankyo_full(data_dict):
-    """気象庁データ含めた全項目の一括保存・更新"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -135,17 +132,14 @@ def insert_kankyo_full(data_dict):
     conn.close()
 
 def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality, memo):
-    """収穫データを保存し、同時に対応する栽培中データを自動削除する"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 1. 収穫テーブルへ登録
     cursor.execute("""
         INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (shukaku_date, house, bed, weight, 0, quality, memo))
     
-    # 2. 連動する定植（栽培中）データの自動削除命令
     cursor.execute("""
         DELETE FROM teichaku 
         WHERE house = %s AND bed = %s;
@@ -173,10 +167,15 @@ def select_all_kankyo():
     conn.close()
     return rows
 
+# カラム順序を絶対固定で取得する（ズレ防止）
 def select_all_shukaku():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM shukaku ORDER BY id DESC")
+    cursor.execute("""
+        SELECT id, shukaku_date, house, bed, weight, quantity, quality, memo, created_at 
+        FROM shukaku 
+        ORDER BY id DESC
+    """)
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
