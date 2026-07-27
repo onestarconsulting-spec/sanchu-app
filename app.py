@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import japanize_matplotlib  # 日本語文字化け（）の完全解消ライブラリ
 import requests
 from database.db_manager import (
     init_db, 
@@ -279,7 +278,7 @@ elif menu == "栽培一覧":
                 st.markdown("---")
 
 # ----------------------------------------------------
-# ④ 今日の環境入力（自由な期間で気象データ一括取得）
+# ④ 今日の環境入力
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
     st.header("【環境・気象データ入力 (仙台気象連動)】")
@@ -414,7 +413,7 @@ elif menu == "AI収穫予測":
             st.success("💡 気象データに基づく全ロットのリアルタイム予測結果です。")
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析（文字化け完全解消・期間選択・全1画面表示）
+# ⑦ 総合グラフ分析（エラー完全解消・文字潰れゼロ・1画面表示）
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・環境データ 総合分析ダッシュボード】")
@@ -430,46 +429,40 @@ elif menu == "総合グラフ分析":
             "sunshine_hours", "precip_total", "precip_max_1h", "precip_max_10m", "snow_depth_sum", "snow_depth_max"
         ])
         
-        # 正しい日付型変換
+        # 日付型変換
         df["dt"] = pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce")
         df = df.dropna(subset=["dt"]).sort_values("dt").reset_index(drop=True)
         
         # ------------------------------------------------
-        # 📅 年・月・期間の選択フィルター
+        # 📅 期間選択フィルター
         # ------------------------------------------------
-        st.subheader("📅 表示期間の絞り込み")
+        st.subheader("📅 表示期間の選択")
         filter_type = st.selectbox(
-            "表示期間のプリセット選択",
-            ["直近30日間", "今月 (2026年7月)", "先月 (2026年6月)", "2026年全期間", "全期間", "期間を日付で指定"]
+            "期間プリセット",
+            ["直近30日間", "今月 (2026年7月)", "先月 (2026年6月)", "2026年全期間", "全期間", "日付で直接指定"]
         )
         
         today = datetime.now().date()
         if filter_type == "直近30日間":
-            start_f = today - timedelta(days=30)
-            end_f = today
+            start_f, end_f = today - timedelta(days=30), today
         elif filter_type == "今月 (2026年7月)":
-            start_f = date(today.year, today.month, 1)
-            end_f = today
+            start_f, end_f = date(today.year, today.month, 1), today
         elif filter_type == "先月 (2026年6月)":
-            first_this_month = date(today.year, today.month, 1)
-            end_f = first_this_month - timedelta(days=1)
+            end_f = date(today.year, today.month, 1) - timedelta(days=1)
             start_f = date(end_f.year, end_f.month, 1)
         elif filter_type == "2026年全期間":
-            start_f = date(2026, 1, 1)
-            end_f = date(2026, 12, 31)
+            start_f, end_f = date(2026, 1, 1), date(2026, 12, 31)
         elif filter_type == "全期間":
-            start_f = df["dt"].min().date()
-            end_f = df["dt"].max().date()
-        else: # カスタム
+            start_f, end_f = df["dt"].min().date(), df["dt"].max().date()
+        else:
             c1, c2 = st.columns(2)
             with c1: start_f = st.date_input("開始日", value=df["dt"].min().date())
             with c2: end_f = st.date_input("終了日", value=today)
 
-        # データフィルタリング
         df_filtered = df[(df["dt"].dt.date >= start_f) & (df["dt"].dt.date <= end_f)].copy()
 
         st.download_button(
-            label="📥 選択期間のデータをCSVダウンロード",
+            label="📥 選択期間のCSVをダウンロード",
             data=df_filtered.to_csv(index=False).encode('utf-8-sig'),
             file_name=f"sendai_climate_{start_f}_{end_f}.csv",
             mime="text/csv"
@@ -477,26 +470,25 @@ elif menu == "総合グラフ分析":
         st.markdown("---")
 
         if df_filtered.empty:
-            st.warning("選択された期間の気象データが見つかりません。「今日の環境入力」からデータを取得してください。")
+            st.warning("選択された期間のデータが見つかりません。")
         else:
             # ------------------------------------------------
-            # 📈 1画面で全グラフを縦に一括表示（文字潰れ＆文字化け完全防止）
+            # 📈 1画面スクロールグラフ表示
             # ------------------------------------------------
             
-            # --- グラフ1: 気温・ハウス水温 ---
-            st.subheader("1. 気温（平均・最高・最低）と ハウス水温の推移")
-            fig1, ax1 = plt.subplots(figsize=(11, 4.5))
+            # グラフ1: 気温・水温
+            st.subheader("1. 気温 (Max / Mean / Min) と ハウス水温")
+            fig1, ax1 = plt.subplots(figsize=(11, 4.2))
             
-            ax1.plot(df_filtered["dt"], df_filtered["max_temp"], marker="^", label="最高気温 (℃)", color="#e53935", linestyle="--", alpha=0.7)
-            ax1.plot(df_filtered["dt"], df_filtered["temp"], marker="o", label="平均気温 (℃)", color="#4caf50", linewidth=2.5)
-            ax1.plot(df_filtered["dt"], df_filtered["min_temp"], marker="v", label="最低気温 (℃)", color="#1e88e5", linestyle="--", alpha=0.7)
-            ax1.plot(df_filtered["dt"], df_filtered["water_temp"], marker="s", label="ハウス水温 (℃)", color="#00bcd4", linewidth=2.0)
+            ax1.plot(df_filtered["dt"], df_filtered["max_temp"], marker="^", label="Max Temp (℃)", color="#e53935", linestyle="--", alpha=0.7)
+            ax1.plot(df_filtered["dt"], df_filtered["temp"], marker="o", label="Mean Temp (℃)", color="#4caf50", linewidth=2.2)
+            ax1.plot(df_filtered["dt"], df_filtered["min_temp"], marker="v", label="Min Temp (℃)", color="#1e88e5", linestyle="--", alpha=0.7)
+            ax1.plot(df_filtered["dt"], df_filtered["water_temp"], marker="s", label="Water Temp (℃)", color="#00bcd4", linewidth=2.0)
             
-            ax1.set_ylabel("気温・水温 (℃)")
-            ax1.grid(True, linestyle=":", alpha=0.6)
+            ax1.set_ylabel("Temperature (℃)")
+            ax1.grid(True, linestyle=":", alpha=0.5)
             ax1.legend(loc="upper left")
             
-            # 自動日付フォーマット＆間引き設定（文字の重なり完全回避）
             ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
             ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
             fig1.autofmt_xdate(bottom=0.2, rotation=45, ha='right')
@@ -504,25 +496,23 @@ elif menu == "総合グラフ分析":
 
             st.markdown("---")
 
-            # --- グラフ2: 湿度・降水量・日照時間 ---
-            st.subheader("2. 湿度・降水量・日照時間の推移")
-            fig2, (ax2_h, ax2_d) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+            # グラフ2: 湿度・降水量・日照時間
+            st.subheader("2. 湿度 (%) / 降水量 (mm) / 日照時間 (h)")
+            fig2, (ax2_h, ax2_d) = plt.subplots(2, 1, figsize=(11, 6.8), sharex=True)
             
-            # 湿度
-            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_mean"], marker="o", label="平均湿度 (%)", color="#009688")
-            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_min"], marker="x", label="最小湿度 (%)", color="#80cbc4", linestyle=":")
-            ax2_h.set_ylabel("湿度 (%)")
-            ax2_h.grid(True, linestyle=":", alpha=0.6)
+            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_mean"], marker="o", label="Mean Humidity (%)", color="#009688")
+            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_min"], marker="x", label="Min Humidity (%)", color="#80cbc4", linestyle=":")
+            ax2_h.set_ylabel("Humidity (%)")
+            ax2_h.grid(True, linestyle=":", alpha=0.5)
             ax2_h.legend(loc="upper left")
             
-            # 降水量と日照時間
-            ax2_d.bar(df_filtered["dt"], df_filtered["precip_total"], label="日降水量 (mm)", color="#2196f3", alpha=0.6, width=0.6)
+            ax2_d.bar(df_filtered["dt"], df_filtered["precip_total"], label="Precipitation (mm)", color="#2196f3", alpha=0.6, width=0.6)
             ax2_d2 = ax2_d.twinx()
-            ax2_d2.plot(df_filtered["dt"], df_filtered["sunshine_hours"], marker="*", label="日照時間 (h)", color="#ff9800", linewidth=2)
+            ax2_d2.plot(df_filtered["dt"], df_filtered["sunshine_hours"], marker="*", label="Sunshine (h)", color="#ff9800", linewidth=2)
             
-            ax2_d.set_ylabel("降水量 (mm)")
-            ax2_d2.set_ylabel("日照時間 (時間)", color="#ff9800")
-            ax2_d.grid(True, linestyle=":", alpha=0.6)
+            ax2_d.set_ylabel("Precipitation (mm)")
+            ax2_d2.set_ylabel("Sunshine (hours)", color="#ff9800")
+            ax2_d.grid(True, linestyle=":", alpha=0.5)
             
             ax2_d.xaxis.set_major_locator(mdates.AutoDateLocator())
             ax2_d.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
@@ -531,19 +521,19 @@ elif menu == "総合グラフ分析":
 
             st.markdown("---")
 
-            # --- グラフ3: 風速・気圧 ---
-            st.subheader("3. 風速・最大瞬間風速・現地気圧の推移")
-            fig3, ax3_w = plt.subplots(figsize=(11, 4.5))
+            # グラフ3: 風速・気圧
+            st.subheader("3. 風速 (m/s) と 現地気圧 (hPa)")
+            fig3, ax3_w = plt.subplots(figsize=(11, 4.2))
             
-            ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_max"], marker="o", label="最大風速 (m/s)", color="#ff5722")
-            ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_instant"], marker="x", label="最大瞬間風速 (m/s)", color="#ffab91", linestyle="--")
-            ax3_w.set_ylabel("風速 (m/s)")
+            ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_max"], marker="o", label="Max Wind Speed (m/s)", color="#ff5722")
+            ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_instant"], marker="x", label="Max Gust Speed (m/s)", color="#ffab91", linestyle="--")
+            ax3_w.set_ylabel("Wind Speed (m/s)")
             
             ax3_p = ax3_w.twinx()
-            ax3_p.plot(df_filtered["dt"], df_filtered["press_land"], label="現地気圧 (hPa)", color="#9c27b0", linestyle=":")
-            ax3_p.set_ylabel("気圧 (hPa)", color="#9c27b0")
+            ax3_p.plot(df_filtered["dt"], df_filtered["press_land"], label="Pressure (hPa)", color="#9c27b0", linestyle=":")
+            ax3_p.set_ylabel("Pressure (hPa)", color="#9c27b0")
             
-            ax3_w.grid(True, linestyle=":", alpha=0.6)
+            ax3_w.grid(True, linestyle=":", alpha=0.5)
             ax3_w.legend(loc="upper left")
             
             ax3_w.xaxis.set_major_locator(mdates.AutoDateLocator())
