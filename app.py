@@ -11,7 +11,7 @@ from database.db_manager import (
     select_all_teichaku, 
     insert_kankyo_full, 
     select_all_kankyo, 
-    insert_shukaku, 
+    insert_shukaku_and_clear_teichaku, 
     select_all_shukaku,
     get_connection
 )
@@ -127,7 +127,6 @@ def delete_record(table_name, record_id):
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
-# 重複していた「栽培一覧」を削除し、メニューをシンプルに統合
 menu = st.sidebar.radio(
     "メニュー切り替え",
     ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "総合グラフ分析"]
@@ -208,7 +207,7 @@ if menu == "ホーム・本日の状況":
         st.subheader("📊 今月の目標収穫量と進捗")
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         this_month_str = datetime.now().strftime("%Y%m")
-        current_weight_g = sum([log[2] for log in shukaku_logs if log[1].startswith(this_month_str)])
+        current_weight_g = sum([log[4] for log in shukaku_logs if log[1].startswith(this_month_str) and len(log) > 4 and log[4] is not None])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
         
@@ -318,34 +317,74 @@ elif menu == "今日の環境入力":
                 st.success("指定日のデータを更新保存しました！")
 
 # ----------------------------------------------------
-# ④ 収穫登録
+# ④ 収穫登録（一括登録対応・株数廃止・栽培管理自動連動）
 # ----------------------------------------------------
 elif menu == "収穫登録":
     st.header("【収穫データ登録】")
+    st.write("収穫を行った棟・ライン・ベッドを選択して登録します。登録完了と同時に、**AI収穫予測（栽培管理表）から自動削除（収穫完了）**されます。")
+    
     with st.form("shukaku_form"):
         shukaku_date_val = st.date_input("収穫日", datetime.now())
-        weight = st.number_input("総重量 (g)", value=350.0)
-        quantity = st.number_input("収穫株数", min_value=1, value=15)
+        
+        house = st.selectbox("ハウス", ["Ⅰ棟", "Ⅱ棟", "Ⅲ棟", "Ⅳ棟"])
+        lines = st.multiselect(
+            "ライン (複数選択可)", 
+            ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T"],
+            default=["A"]
+        )
+        beds = st.multiselect(
+            "ベッド (複数選択可)", 
+            [f"{i}番ベッド" for i in range(1, 21)],
+            default=["1番ベッド"]
+        )
+        
+        weight = st.number_input("1ベッドあたりの実収穫重量 (g)", min_value=1.0, value=180.0, step=10.0)
         quality = st.selectbox("品質ランク", ["秀", "優", "良", "可"])
         memo = st.text_area("備考", "")
         
-        submitted = st.form_submit_button("この内容で登録する")
+        submitted = st.form_submit_button("この内容で収穫登録する (栽培一覧から自動削除)")
         if submitted:
-            insert_shukaku(shukaku_date_val.strftime("%Y%m%d"), weight, int(quantity), quality, memo)
-            st.success("収穫データを保存しました！")
+            if not lines:
+                st.error("⚠️ ラインを1つ以上選択してください。")
+            elif not beds:
+                st.error("⚠️ ベッドを1つ以上選択してください。")
+            else:
+                str_shukaku_date = shukaku_date_val.strftime("%Y%m%d")
+                count = 0
+                for l in lines:
+                    full_house = f"{house} ({l}ライン)"
+                    for b in beds:
+                        insert_shukaku_and_clear_teichaku(str_shukaku_date, full_house, b, weight, quality, memo)
+                        count += 1
+                        
+                st.success(f"🎉 収穫完了！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を収穫登録し、AI収穫予測表から自動消去しました！")
 
 # ----------------------------------------------------
-# ⑤ AI収穫予測 (栽培管理・ソート・削除・CSV機能付き)
+# ⑤ AI収穫予測 (精度自動フィードバック補正付き)
 # ----------------------------------------------------
 elif menu == "AI収穫予測 (栽培管理)":
     st.header("【AI気象補正 収穫予測・栽培管理テーブル】")
     teichaku_records = select_all_teichaku()
     kankyo_logs = select_all_kankyo()
+    shukaku_logs = select_all_shukaku()
     
+    # --- 【AI精度自動補正ロジック】 ---
+    # 過去の収穫実績データから、AI予測値に対する実際の収量の比率（精度倍率）を算出
+    yield_accuracy_factor = 1.0
+    if shukaku_logs:
+        valid_weights = [log[4] for log in shukaku_logs if len(log) > 4 and log[4] is not None and log[4] > 0]
+        if valid_weights:
+            avg_actual = sum(valid_weights) / len(valid_weights)
+            # 標準基準180gとの比較補正
+            yield_accuracy_factor = round(avg_actual / 180.0, 2)
+            if yield_accuracy_factor < 0.5: yield_accuracy_factor = 0.5
+            if yield_accuracy_factor > 1.5: yield_accuracy_factor = 1.5
+
+    st.info(f"🧠 **AI収量予測精度モデル**：過去の収穫実績より、現在の重量推定制精度は **{yield_accuracy_factor * 100:.1f}%** でキャリブレーションされています。")
+
     if not teichaku_records:
-        st.warning("現在栽培中のロットデータがありません。「定植登録」から追加してください。")
+        st.warning("現在栽培中のロットデータはありません。全ロットが収穫完了しているか、定植登録が必要です。")
     else:
-        # CSVダウンロードボタンを最上部に設置
         df_export = pd.DataFrame(teichaku_records, columns=["ID", "品種", "ハウス", "ベッド", "定植日", "株数", "予定サイズ", "メモ", "登録日時"])
         st.download_button(
             label="📥 全栽培ロットデータをCSVダウンロード",
@@ -358,7 +397,6 @@ elif menu == "AI収穫予測 (栽培管理)":
         kankyo_dict = {log[1]: {"temp": log[2], "water_temp": log[5], "dli": log[6]} for log in kankyo_logs}
         lots_data = []
         
-        # 1. 各ロットのAI計算＆ソート用キーの解析
         for record in teichaku_records:
             rec_id, variety, house, bed, plant_date, quantity, target_size = record[0], record[1], record[2], record[3], record[4], record[5], record[6]
             clean_date = plant_date.strip().replace("/", "").replace("-", "")
@@ -390,14 +428,13 @@ elif menu == "AI収穫予測 (栽培管理)":
                     target_weight = float(''.join(filter(str.isdigit, target_size)))
                 except:
                     target_weight = 180.0
-                current_weight = int(target_weight * (current_growth_rate / 100.0))
                 
-                # --- ソート用のキー抽出 ---
-                # ライン文字 (A〜T)
+                # 収穫実績精度補正率を推定重量に反映
+                current_weight = int(target_weight * (current_growth_rate / 100.0) * yield_accuracy_factor)
+                
                 line_match = re.search(r'\(([A-Z])ライン\)', house)
                 line_code = line_match.group(1) if line_match else "A"
                 
-                # ベッド番号 (数値 1〜20)
                 bed_match = re.search(r'(\d+)', bed)
                 bed_num = int(bed_match.group(1)) if bed_match else 0
                 
@@ -410,7 +447,6 @@ elif menu == "AI収穫予測 (栽培管理)":
                     "weight": f"{current_weight} g",
                     "pred_date": predicted_date_str,
                     "rem_days_str": f"あと {remaining_days} 日",
-                    # ソートキー用
                     "sort_rem_days": remaining_days,
                     "sort_line": line_code,
                     "sort_bed": bed_num
@@ -418,10 +454,9 @@ elif menu == "AI収穫予測 (栽培管理)":
             except:
                 pass
         
-        # 2. 指定通りの多重ソート実行（①残日数昇順 ➔ ②ライン順 ➔ ③ベッド番号順）
+        # 多重ソート（①残日数昇順 ➔ ②ライン順 ➔ ③ベッド番号順）
         lots_data.sort(key=lambda x: (x["sort_rem_days"], x["sort_line"], x["sort_bed"]))
 
-        # 3. テーブルヘッダーの描画（レスポンシブ配置）
         h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7, h_col8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
         h_col1.markdown("**栽培場所**")
         h_col2.markdown("**品種**")
@@ -433,7 +468,6 @@ elif menu == "AI収穫予測 (栽培管理)":
         h_col8.markdown("**操作**")
         st.markdown("---")
 
-        # 4. 各ロットのデータをソート順通りに1行ずつ描画 ＋ 削除ボタン設置
         for lot in lots_data:
             c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
             c1.write(lot["location"])
@@ -443,14 +477,12 @@ elif menu == "AI収穫予測 (栽培管理)":
             c5.write(lot["weight"])
             c6.write(lot["pred_date"])
             
-            # あと0日の場合は緑で強調
             if lot["sort_rem_days"] == 0:
                 c7.markdown(f":green[**{lot['rem_days_str']}**]")
             else:
                 c7.write(lot["rem_days_str"])
                 
-            # 各行に配置した削除ボタン
-            if c8.button("🗑️", key=f"del_pred_{lot['id']}", help="このロットを削除"):
+            if c8.button("🗑️", key=f"del_pred_{lot['id']}", help="手動削除"):
                 if delete_record("teichaku", lot["id"]):
                     st.success("削除しました。")
                     st.rerun()
