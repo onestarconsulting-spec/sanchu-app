@@ -3,3 +3,4 @@ pandas
 matplotlib
 openpyxl
 psycopg2-binary
+japanize-matplotlib
