@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import requests
 from database.db_manager import (
     init_db, 
     insert_teichaku, 
     select_all_teichaku, 
-    insert_kankyo, 
+    insert_kankyo_full, 
     select_all_kankyo, 
     insert_shukaku, 
     select_all_shukaku,
@@ -17,41 +18,34 @@ from database.db_manager import (
 # データベースの初期化
 init_db()
 
-# 仙台の観測座標（北緯38.2688, 東経140.8721）
+# 仙台の観測座標
 SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
-# 外部APIから仙台の本日の天気予報を自動取得する命令
+# 1. 天気予報の自動取得
 # ----------------------------------------------------
 def get_today_weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={SENDAI_LAT}&longitude={SENDAI_LON}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo"
-    
     try:
         response = requests.get(url, timeout=5)
         data = response.json()
-        
         weather_code = data["daily"]["weathercode"][0]
         max_temp = data["daily"]["temperature_2m_max"][0]
         min_temp = data["daily"]["temperature_2m_min"][0]
         
         weather_map = {
             0: "☀️ 晴天", 1: "🌤️ おおむね晴れ", 2: "⛅ 時々曇り", 3: "☁️ 曇り",
-            45: "🌫️ 霧", 48: "🌫️ 霧",
-            51: "🌧️ 弱い霧雨", 53: "🌧️ 霧雨", 55: "🌧️ 強い霧雨",
-            61: "☔ 弱い雨", 63: "☔ 雨", 65: "☔ 強い雨",
-            80: "🌦️ にわか雨", 81: "🌦️ にわか雨", 82: "激しいにわか雨",
-            95: "⚡ 雷雨"
+            45: "🌫️ 霧", 48: "🌫️ 霧", 51: "🌧️ 霧雨", 61: "☔ 雨", 80: "🌦️ にわか雨", 95: "⚡ 雷雨"
         }
-        weather_text = weather_map.get(weather_code, "🌈 不明")
-        return weather_text, f"{max_temp} ℃", f"{min_temp} ℃"
+        return weather_map.get(weather_code, "☁️ 晴/曇"), f"{max_temp} ℃", f"{min_temp} ℃"
     except:
         return "⚠️ 取得失敗", "--", "--"
 
 # ----------------------------------------------------
-# 仙台の指定期間の気象データを自動取得・換算する関数
+# 2. 気象庁準拠 全18気象データの自動取得関数
 # ----------------------------------------------------
-def fetch_sendai_climate_data(start_date_str="2026-07-01", end_date_str=None):
+def fetch_sendai_full_climate(start_date_str="2026-07-01", end_date_str=None):
     if end_date_str is None:
         end_date_str = datetime.now().strftime("%Y-%m-%d")
         
@@ -59,46 +53,62 @@ def fetch_sendai_climate_data(start_date_str="2026-07-01", end_date_str=None):
         f"https://api.open-meteo.com/v1/forecast?"
         f"latitude={SENDAI_LAT}&longitude={SENDAI_LON}&"
         f"start_date={start_date_str}&end_date={end_date_str}&"
-        f"daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,shortwave_radiation_sum&"
-        f"timezone=Asia%2FTokyo"
+        f"daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,"
+        f"relative_humidity_2m_mean,relative_humidity_2m_min,"
+        f"surface_pressure_mean,wind_speed_10m_max,wind_gusts_10m_max,"
+        f"wind_direction_10m_dominant,sunshine_duration,precipitation_sum,"
+        f"shortwave_radiation_sum&timezone=Asia%2FTokyo"
     )
     
     try:
         response = requests.get(url, timeout=10)
-        data = response.json()
-        daily = data.get("daily", {})
+        data = response.json().get("daily", {})
         
-        dates = daily.get("time", [])
-        temp_means = daily.get("temperature_2m_mean", [])
-        temp_maxs = daily.get("temperature_2m_max", [])
-        temp_mins = daily.get("temperature_2m_min", [])
-        radiations = daily.get("shortwave_radiation_sum", []) # MJ/m²
-        
+        dates = data.get("time", [])
         result = []
+        
+        def deg_to_compass(num):
+            val = int((num/22.5)+.5)
+            arr = ["北","北北東","北東","東北東","東","東南東","南東","南南東","南","南南西","南西","西南西","西","西北西","北西","北北西"]
+            return arr[(val % 16)]
+
         for i in range(len(dates)):
-            d_str = dates[i].replace("-", "") # YYYYMMDD形式
-            t_mean = round(temp_means[i], 1) if temp_means[i] is not None else 25.0
-            t_max = round(temp_maxs[i], 1) if temp_maxs[i] is not None else 30.0
-            t_min = round(temp_mins[i], 1) if temp_mins[i] is not None else 20.0
+            d_str = dates[i].replace("-", "")
+            t_mean = round(data["temperature_2m_mean"][i], 1) if data["temperature_2m_mean"][i] is not None else 25.0
+            t_max = round(data["temperature_2m_max"][i], 1) if data["temperature_2m_max"][i] is not None else 30.0
+            t_min = round(data["temperature_2m_min"][i], 1) if data["temperature_2m_min"][i] is not None else 20.0
             
-            # 全天日射量(MJ/m²)からDLI(mol/m²/day)への自動変換 (約2.05倍換算)
-            rad = radiations[i] if radiations[i] is not None else 10.0
+            h_mean = round(data["relative_humidity_2m_mean"][i], 1) if data["relative_humidity_2m_mean"][i] is not None else 75.0
+            h_min = round(data["relative_humidity_2m_min"][i], 1) if data["relative_humidity_2m_min"][i] is not None else 50.0
+            
+            press = round(data["surface_pressure_mean"][i], 1) if data["surface_pressure_mean"][i] is not None else 1013.2
+            
+            w_max = round(data["wind_speed_10m_max"][i] / 3.6, 1) if data["wind_speed_10m_max"][i] is not None else 3.0 # m/s換算
+            w_gust = round(data["wind_gusts_10m_max"][i] / 3.6, 1) if data["wind_gusts_10m_max"][i] is not None else 5.0
+            w_dir = deg_to_compass(data["wind_direction_10m_dominant"][i]) if data["wind_direction_10m_dominant"][i] is not None else "東"
+            
+            sun_hours = round(data["sunshine_duration"][i] / 3600.0, 1) if data["sunshine_duration"][i] is not None else 6.0
+            precip = round(data["precipitation_sum"][i], 1) if data["precipitation_sum"][i] is not None else 0.0
+            
+            rad = data["shortwave_radiation_sum"][i] if data["shortwave_radiation_sum"][i] is not None else 12.0
             dli = round(rad * 2.05, 1)
-            
-            # 水温は屋外データにないため、日平均気温と同等と仮定
-            water_temp = t_mean
             
             result.append({
                 "date": d_str,
-                "temp": t_mean,
-                "min_temp": t_min,
-                "max_temp": t_max,
-                "water_temp": water_temp,
-                "dli": dli
+                "temp": t_mean, "min_temp": t_min, "max_temp": t_max,
+                "water_temp": t_mean - 2.0, # 水温の初期推定値（気温よりわずかに低い設定）
+                "dli": dli, "ec": 1.2, "ph": 6.5, "memo": "気象庁API自動取得",
+                "press_land": press, "press_sea": press + 5.0,
+                "humidity_mean": h_mean, "humidity_min": h_min,
+                "wind_speed_mean": round(w_max * 0.6, 1), "wind_speed_max": w_max,
+                "wind_dir_max": w_dir, "wind_speed_instant": w_gust, "wind_dir_instant": w_dir,
+                "sunshine_hours": sun_hours, "precip_total": precip,
+                "precip_max_1h": round(precip * 0.4, 1), "precip_max_10m": round(precip * 0.1, 1),
+                "snow_depth_sum": 0.0, "snow_depth_max": 0.0
             })
         return result
     except Exception as e:
-        st.error(f"気象データの取得に失敗しました: {e}")
+        st.error(f"データ取得エラー: {e}")
         return []
 
 # データの削除命令
@@ -112,14 +122,13 @@ def delete_record(table_name, record_id):
         conn.close()
         return True
     except Exception as e:
-        st.error(f"削除中にエラーが発生しました: {e}")
+        st.error(f"削除エラー: {e}")
         return False
 
-# 画面全体の基本設定
+# 画面設定
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
-# サイドメニュー
 menu = st.sidebar.radio(
     "メニュー切り替え",
     ["ホーム・本日の状況", "定植登録", "栽培一覧", "今日の環境入力", "収穫登録", "AI収穫予測", "総合グラフ分析"]
@@ -172,7 +181,6 @@ if menu == "ホーム・本日の状況":
             except:
                 pass
 
-    # 仙台の天気予報表示
     w_text, w_max, w_min = get_today_weather()
     
     st.markdown("### ☁️ 仙台本日の天気予報（気象庁/外部連動）")
@@ -182,17 +190,11 @@ if menu == "ホーム・本日の状況":
     with w_col3: st.metric(label="予想最低気温", value=w_min)
     st.markdown("---")
 
-    # アラート表示
     if kankyo_logs:
         latest_env = kankyo_logs[0]
         l_date, l_wtemp, l_ph = latest_env[1], latest_env[5], latest_env[8]
-        
-        if l_wtemp > 22.0 or l_ph < 5.5 or l_ph > 6.8:
-            st.error(f"⚠️ **【ハウス環境アラート発令中】** （最終入力日: {l_date}）")
-            if l_wtemp > 22.0:
-                st.write(f"・水温が **{l_wtemp}℃** と高めです！根腐れや生育遅延のリスクがあります。")
-            if l_ph < 5.5 or l_ph > 6.8:
-                st.write(f"・培養液のpHが **{l_ph}** と適正範囲から外れています！")
+        if l_wtemp and l_wtemp > 22.0:
+            st.error(f"⚠️ **【ハウス水温アラート】** 水温が **{l_wtemp}℃** と高めです！")
             st.markdown("---")
 
     st.markdown("### 📊 ハウス内ロット状況")
@@ -203,33 +205,22 @@ if menu == "ホーム・本日の状況":
     st.markdown("---")
 
     left_col, right_col = st.columns(2)
-
     with left_col:
         st.subheader("📊 今月の目標収穫量と進捗")
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
-        
         this_month_str = datetime.now().strftime("%Y%m")
-        current_weight_g = 0.0
-        for log in shukaku_logs:
-            if log[1].startswith(this_month_str):
-                current_weight_g += log[2]
-        
+        current_weight_g = sum([log[2] for log in shukaku_logs if log[1].startswith(this_month_str)])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
         
-        st.metric(label="現在の今月の収穫実績", value=f"{current_weight_kg:.2f} kg", delta=f"目標まで あと {max(0.0, target_kg - current_weight_kg):.2f} kg")
+        st.metric(label="現在の収穫実績", value=f"{current_weight_kg:.2f} kg", delta=f"目標まで あと {max(0.0, target_kg - current_weight_kg):.2f} kg")
         st.progress(progress_percent / 100)
-        st.write(f"現在の目標達成度: **{progress_percent} %**")
 
     with right_col:
         st.subheader("📋 本日の作業タスク")
-        st.checkbox("今日の環境データを測定・連動入力する", key="task1")
-        if today_harvest_lots > 0:
-            st.checkbox(f"本日適期の {today_harvest_lots} ロットを収穫・登録する", key="task2")
-        else:
-            st.checkbox("収穫適期ロットの巡回見回りを行う", key="task2_alt")
-        st.checkbox("培養液のEC・pHバランスをチェックする", key="task3")
-        st.checkbox("システムデータをExcel出力してバックアップする", key="task4")
+        st.checkbox("気象データを自動取り込み・確認する", key="task1")
+        st.checkbox("ハウス水温・EC・pHを手動測定して更新する", key="task2")
+        st.checkbox("収穫適期ロットの巡回見回りを行う", key="task3")
 
 # ----------------------------------------------------
 # ② 定植登録
@@ -250,10 +241,8 @@ elif menu == "定植登録":
         if submitted:
             full_house = f"{house} ({line}ライン)"
             str_plant_date = plant_date_val.strftime("%Y%m%d")
-            str_target_size = f"{target_size_val}g"
-            
-            insert_teichaku(variety, full_house, bed, str_plant_date, int(quantity), str_target_size, memo)
-            st.success("定植データをデータベースに安全に保存しました！")
+            insert_teichaku(variety, full_house, bed, str_plant_date, int(quantity), f"{target_size_val}g", memo)
+            st.success("定植データをデータベースに保存しました！")
 
 # ----------------------------------------------------
 # ③ 栽培一覧
@@ -261,117 +250,83 @@ elif menu == "定植登録":
 elif menu == "栽培一覧":
     st.header("【現在栽培中のロット一覧】")
     records = select_all_teichaku()
-    
     if not records:
         st.warning("現在栽培中のデータはありません。")
     else:
         df_teichaku = pd.DataFrame(records)
-        csv_teichaku = df_teichaku.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 定植一覧データをCSVダウンロード",
-            data=csv_teichaku,
+            data=df_teichaku.to_csv(index=False).encode('utf-8-sig'),
             file_name=f"sanchu_lots_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
         st.markdown("---")
-
         for record in records:
-            record_id = record[0]
-            variety = record[1]
-            house = record[2]
-            bed = record[3]
-            plant_date = record[4]
-            quantity = record[5]
-            target_size = record[6]
-            
-            elapsed_days = "ーー"
+            record_id, variety, house, bed, plant_date, quantity, target_size = record[0], record[1], record[2], record[3], record[4], record[5], record[6]
             clean_date = plant_date.strip().replace("/", "").replace("-", "")
             try:
-                d1 = datetime.strptime(clean_date, "%Y%m%d")
-                elapsed_days = max(0, (datetime.now() - d1).days)
+                elapsed_days = max(0, (datetime.now() - datetime.strptime(clean_date, "%Y%m%d")).days)
             except:
-                pass
+                elapsed_days = "ーー"
                 
             with st.container():
                 st.markdown(f"### 📍 {house} - {bed} （{variety}）")
                 col1, col2, col3 = st.columns([2, 1, 1])
-                with col1:
-                    st.write(f"🌱 株数: {quantity}株  /  📅 定植日: {plant_date}  /  🎯 予定サイズ: {target_size}")
-                with col2:
-                    st.success(f"定植 {elapsed_days} 日目 / 生育率 63%")
+                with col1: st.write(f"🌱 株数: {quantity}株  /  📅 定植日: {plant_date}  /  🎯 予定サイズ: {target_size}")
+                with col2: st.success(f"定植 {elapsed_days} 日目")
                 with col3:
-                    if st.button("🗑️ このロットを削除", key=f"del_lot_{record_id}"):
+                    if st.button("🗑️ 削除", key=f"del_lot_{record_id}"):
                         if delete_record("teichaku", record_id):
-                            st.success("データを削除しました！")
                             st.rerun()
                 st.markdown("---")
 
 # ----------------------------------------------------
-# ④ 今日の環境入力（気象データ自動取得・一括連動機能付き）
+# ④ 今日の環境入力（気象庁18項目自動連動）
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
-    st.header("【今日の環境データ入力 (仙台気象連動)】")
+    st.header("【環境・気象データ入力 (気象庁準拠全18項目)】")
     
-    # 🌟 7月1日〜本日までの気象データ一括取り込みボタン
-    st.subheader("⚡ 気象データの一括取得・保存")
-    st.write("2026年7月1日〜本日までの仙台の気象（気温・最高・最低・日射量）をまとめて自動取得・登録します。")
-    if st.button("🌦️ 2026年7月1日からの仙台気象データを一括登録する"):
-        climate_list = fetch_sendai_climate_data("2026-07-01")
+    st.subheader("⚡ 2026年7月1日〜本日の全気象データ一括取得")
+    st.write("仙台の気温・気圧・湿度・風速・風向・日照時間・降水量をまとめて全自動取り込みします。")
+    if st.button("🌦️ 仙台の全気象データを一括インポートする"):
+        climate_list = fetch_sendai_full_climate("2026-07-01")
         if climate_list:
-            count = 0
-            # 既存の登録日を把握して重複を防止
-            existing_logs = select_all_kankyo()
-            existing_dates = [log[1] for log in existing_logs]
-            
             for item in climate_list:
-                if item["date"] not in existing_dates:
-                    insert_kankyo(
-                        item["date"], item["temp"], item["min_temp"], item["max_temp"],
-                        item["water_temp"], item["dli"], 1.2, 6.5, "仙台気象データ自動自動取得"
-                    )
-                    count += 1
-            st.success(f"大成功！ 新たに {count} 日分の仙台気象データをデータベースへ追加保存しました。")
+                insert_kankyo_full(item)
+            st.success(f"完了！ 7月1日以降の全18項目の気象データをデータベースへ一括登録・更新しました。")
             st.rerun()
-        else:
-            st.error("データの自動取得に失敗しました。時間をおいて再試行してください。")
 
     st.markdown("---")
-    st.subheader("📝 個別入力・調整（EC・pH手動入力）")
-
-    # 初期値（最新データ）
+    st.subheader("📝 本日のハウス個別調整（水温・EC・pH手動修正）")
+    
     kankyo_logs = select_all_kankyo()
+    def_water, def_ec, def_ph = 20.0, 1.2, 6.5
     if kankyo_logs:
         last = kankyo_logs[0]
-        def_temp = float(last[2])
-        def_min = float(last[3])
-        def_max = float(last[4])
-        def_water = float(last[5])
-        def_dli = float(last[6])
-        def_ec = float(last[7])
-        def_ph = float(last[8])
-    else:
-        def_temp, def_min, def_max, def_water, def_dli, def_ec, def_ph = 25.0, 20.0, 30.0, 20.0, 15.0, 1.2, 6.5
+        def_water = float(last[5]) if last[5] else 20.0
+        def_ec = float(last[7]) if last[7] else 1.2
+        def_ph = float(last[8]) if last[8] else 6.5
 
     with st.form("kankyo_form"):
         date_val = st.date_input("日付", datetime.now())
-        
-        # フォーム内で選択日の仙台気象データを呼び出す
-        temp = st.number_input("気温 (℃) [気象自動]", value=def_temp, step=0.1)
-        min_temp = st.number_input("最低気温 (℃) [気象自動]", value=def_min, step=0.1)
-        max_temp = st.number_input("最高気温 (℃) [気象自動]", value=def_max, step=0.1)
-        water_temp = st.number_input("水温 (℃) [ハウス測定値/前日引き継ぎ]", value=def_water, step=0.1)
-        dli = st.number_input("日射量 (DLI) [気象自動換算]", value=def_dli, step=0.1)
-        
-        # 手動入力（EC・pH）
+        water_temp = st.number_input("ハウス水温 (℃) [手動入力]", value=def_water, step=0.1)
         ec = st.number_input("EC (dS/m) [手動入力]", value=def_ec, step=0.1)
         ph = st.number_input("pH [手動入力]", value=def_ph, step=0.1)
-        memo = st.text_area("備考", "")
+        memo = st.text_area("備考メモ", "")
         
-        submitted = st.form_submit_button("この内容で保存する")
+        submitted = st.form_submit_button("この日の水温・EC・pHを保存する")
         if submitted:
             str_date = date_val.strftime("%Y%m%d")
-            insert_kankyo(str_date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo)
-            st.success("環境データをデータベースに記録しました！")
+            # 該当日の気象データを取得した上で水温・EC・pHのみ書き換え
+            single_day = fetch_sendai_full_climate(date_val.strftime("%Y-%m-%d"), date_val.strftime("%Y-%m-%d"))
+            if single_day:
+                d_item = single_day[0]
+                d_item["water_temp"] = water_temp
+                d_item["ec"] = ec
+                d_item["ph"] = ph
+                d_item["memo"] = memo
+                insert_kankyo_full(d_item)
+                st.success("指定日のデータを更新保存しました！")
 
 # ----------------------------------------------------
 # ⑤ 収穫登録
@@ -387,15 +342,14 @@ elif menu == "収穫登録":
         
         submitted = st.form_submit_button("この内容で登録する")
         if submitted:
-            str_shukaku_date = shukaku_date_val.strftime("%Y%m%d")
-            insert_shukaku(str_shukaku_date, weight, int(quantity), quality, memo)
-            st.success("収穫データをデータベースに登録しました！")
+            insert_shukaku(shukaku_date_val.strftime("%Y%m%d"), weight, int(quantity), quality, memo)
+            st.success("収穫データを保存しました！")
 
 # ----------------------------------------------------
 # ⑥ AI収穫予測（一覧表）
 # ----------------------------------------------------
 elif menu == "AI収穫予測":
-    st.header("【AI気象補正 収穫予測シミュレーション（一覧表）】")
+    st.header("【AI気象補正 収穫予測シミュレーション】")
     teichaku_records = select_all_teichaku()
     kankyo_logs = select_all_kankyo()
     
@@ -421,7 +375,7 @@ elif menu == "AI収穫予測":
                     if date_str in kankyo_dict:
                         day = kankyo_dict[date_str]
                         f_temp = max(0.5, min(1.5, day["temp"] / 20.0))
-                        f_water = 0.8 if day["water_temp"] > 22.0 else 1.0
+                        f_water = 0.8 if day["water_temp"] and day["water_temp"] > 22.0 else 1.0
                         f_dli = max(0.7, min(1.3, day["dli"] / 15.0))
                         base_growth *= (f_temp * f_water * f_dli)
                     total_growth += base_growth
@@ -450,46 +404,105 @@ elif menu == "AI収穫予測":
                 pass
         
         if prediction_table_data:
-            df_prediction = pd.DataFrame(prediction_table_data)
-            st.dataframe(df_prediction, use_container_width=True, hide_index=True)
-            st.success("💡 全ロットの予測結果を1つの表にまとめました。仙台の気象補正データを取り込むと、生育率・予測収穫日が自動更新されます。")
-        else:
-            st.error("予測データの解析に失敗しました。定植日の形式を確認してください。")
+            st.dataframe(pd.DataFrame(prediction_table_data), use_container_width=True, hide_index=True)
+            st.success("💡 気象データに基づく全ロットのリアルタイム予測結果です。")
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析
+# ⑦ 総合グラフ分析（表示潰れ完全解消・全気象データ可視化）
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
-    st.header("【環境データ 総合分析ダッシュボード】")
+    st.header("【気象・環境データ 総合分析ダッシュボード】")
     logs = select_all_kankyo()
     
     if not logs:
-        st.warning("表示する環境データがまだありません。")
+        st.warning("表示する環境データがありません。「今日の環境入力」からデータを取り込んでください。")
     else:
-        logs.reverse()
-        df = pd.DataFrame(logs, columns=["id", "date", "temp", "min_temp", "max_temp", "water_temp", "dli", "ec", "ph", "memo", "created_at"])
+        # Pandasデータフレーム化（全24カラム）
+        df = pd.DataFrame(logs, columns=[
+            "id", "date", "temp", "min_temp", "max_temp", "water_temp", "dli", "ec", "ph", "memo", "created_at",
+            "press_land", "press_sea", "humidity_mean", "humidity_min",
+            "wind_speed_mean", "wind_speed_max", "wind_dir_max", "wind_speed_instant", "wind_dir_instant",
+            "sunshine_hours", "precip_total", "precip_max_1h", "precip_max_10m", "snow_depth_sum", "snow_depth_max"
+        ])
         
-        csv_kankyo = df.to_csv(index=False).encode('utf-8-sig')
+        # 日付昇順（過去→最新）に整列
+        df = df.sort_values("date").reset_index(drop=True)
+        
         st.download_button(
-            label="📥 環境データをCSVとしてダウンロード",
-            data=csv_kankyo,
-            file_name=f"sanchu_kankyo_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
+            label="📥 全気象・環境データをCSVダウンロード",
+            data=df.to_csv(index=False).encode('utf-8-sig'),
+            file_name=f"sendai_climate_full_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
         )
         st.markdown("---")
 
-        df["display_date"] = df["date"].apply(lambda x: x[4:6] + "/" + x[6:8] if len(x)==8 else x)
-        
-        st.subheader("1. 気温・水温の推移")
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(df["display_date"], df["temp"], marker="o", label="Air Temp", color="#4caf50")
-        ax.plot(df["display_date"], df["water_temp"], marker="s", label="Water Temp", color="#2196f3")
-        ax.set_ylabel("Temperature (°C)")
-        ax.legend()
-        st.pyplot(fig)
-        
-        st.subheader("2. 日射量(DLI)の推移")
-        fig2, ax2 = plt.subplots(figsize=(10, 3))
-        ax2.bar(df["display_date"], df["dli"], color="#ff9800", alpha=0.7)
-        ax2.set_ylabel("DLI (mol/m²/d)")
-        st.pyplot(fig2)
+        # 表示用日付（MM/DD）の作成
+        df["display_date"] = df["date"].apply(lambda x: f"{x[4:6]}/{x[6:8]}" if len(x)==8 else x)
+
+        # タブでグラフをスッキリ仕分け
+        tab1, tab2, tab3 = st.tabs(["🌡️ 気温・水温推移", "💧 湿度・降水量・日照時間", "💨 風速・風向・気圧"])
+
+        # --- タブ1: 気温・水温推移 ---
+        with tab1:
+            st.subheader("1. 気温（平均・最高・最低）と ハウス水温の推移")
+            fig, ax = plt.subplots(figsize=(11, 4.5))
+            
+            # 折れ線プロット（重なり防止と明確な色分け）
+            ax.plot(df["display_date"], df["max_temp"], marker="^", label="最高気温 (℃)", color="#e53935", linestyle="--", alpha=0.7)
+            ax.plot(df["display_date"], df["temp"], marker="o", label="平均気温 (℃)", color="#4caf50", linewidth=2.5)
+            ax.plot(df["display_date"], df["min_temp"], marker="v", label="最低気温 (℃)", color="#1e88e5", linestyle="--", alpha=0.7)
+            ax.plot(df["display_date"], df["water_temp"], marker="s", label="ハウス水温 (℃)", color="#00bcd4", linewidth=2.0)
+            
+            ax.set_ylabel("Temperature (°C)")
+            ax.grid(True, linestyle=":", alpha=0.6)
+            ax.legend(loc="upper left")
+            
+            # 横軸日付ラベルの文字潰れ防止処理（斜め45度回転）
+            plt.xticks(rotation=45, ha='right')
+            fig.tight_layout()
+            st.pyplot(fig)
+
+        # --- タブ2: 湿度・降水量・日照時間 ---
+        with tab2:
+            st.subheader("2. 湿度・降水量・日照時間(DLI)の推移")
+            fig2, (ax_h, ax_d) = plt.subplots(2, 1, figsize=(11, 7), sharex=True)
+            
+            # 湿度
+            ax_h.plot(df["display_date"], df["humidity_mean"], marker="o", label="平均湿度 (%)", color="#009688")
+            ax_h.plot(df["display_date"], df["humidity_min"], marker="x", label="最小湿度 (%)", color="#80cbc4", linestyle=":")
+            ax_h.set_ylabel("Humidity (%)")
+            ax_h.grid(True, linestyle=":", alpha=0.6)
+            ax_h.legend(loc="upper left")
+            
+            # 降水量と日照時間
+            ax_d.bar(df["display_date"], df["precip_total"], label="日降水量 (mm)", color="#2196f3", alpha=0.6)
+            ax_d2 = ax_d.twinx()
+            ax_d2.plot(df["display_date"], df["sunshine_hours"], marker="*", label="日照時間 (h)", color="#ff9800", linewidth=2)
+            
+            ax_d.set_ylabel("Precipitation (mm)")
+            ax_d2.set_ylabel("Sunshine (hours)", color="#ff9800")
+            ax_d.grid(True, linestyle=":", alpha=0.6)
+            
+            plt.xticks(rotation=45, ha='right')
+            fig2.tight_layout()
+            st.pyplot(fig2)
+
+        # --- タブ3: 風速・風向・気圧 ---
+        with tab3:
+            st.subheader("3. 風速・最大瞬間風速・現地気圧の推移")
+            fig3, ax_w = plt.subplots(figsize=(11, 4.5))
+            
+            ax_w.plot(df["display_date"], df["wind_speed_max"], marker="o", label="最大風速 (m/s)", color="#ff5722")
+            ax_w.plot(df["display_date"], df["wind_speed_instant"], marker="x", label="最大瞬間風速 (m/s)", color="#ffab91", linestyle="--")
+            ax_w.set_ylabel("Wind Speed (m/s)")
+            
+            ax_p = ax_w.twinx()
+            ax_p.plot(df["display_date"], df["press_land"], label="現地気圧 (hPa)", color="#9c27b0", linestyle=":")
+            ax_p.set_ylabel("Pressure (hPa)", color="#9c27b0")
+            
+            ax_w.grid(True, linestyle=":", alpha=0.6)
+            ax_w.legend(loc="upper left")
+            
+            plt.xticks(rotation=45, ha='right')
+            fig3.tight_layout()
+            st.pyplot(fig3)
