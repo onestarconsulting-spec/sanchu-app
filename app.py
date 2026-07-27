@@ -27,8 +27,7 @@ SENDAI_LON = 140.8721
 # 0. 収穫データから重量(g)を安全に抽出するヘルパー関数
 # ----------------------------------------------------
 def get_weight_from_log(log):
-    """古いデータ構造と新しいデータ構造の両方に対応して重量(g)を抽出"""
-    for val in log[2:]:  # IDと日付以降の要素をスキャン
+    for val in log[2:]:
         if isinstance(val, (int, float)) and val > 0:
             return float(val)
     return 0.0
@@ -137,9 +136,10 @@ def delete_record(table_name, record_id):
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
+# サイドメニューに「収穫実績・分析」を新設
 menu = st.sidebar.radio(
     "メニュー切り替え",
-    ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "総合グラフ分析"]
+    ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "収穫実績・分析", "総合グラフ分析"]
 )
 
 # ----------------------------------------------------
@@ -218,7 +218,6 @@ if menu == "ホーム・本日の状況":
         target_kg = st.number_input("今月の目標収穫量 (kg)", min_value=1, value=50)
         this_month_str = datetime.now().strftime("%Y%m")
         
-        # 安全な数値抽出で今月の収穫総重量を算出
         current_weight_g = sum([get_weight_from_log(log) for log in shukaku_logs if log[1].startswith(this_month_str)])
         current_weight_kg = current_weight_g / 1000.0
         progress_percent = min(100, int((current_weight_kg / target_kg) * 100)) if target_kg > 0 else 0
@@ -372,7 +371,7 @@ elif menu == "収穫登録":
                 st.success(f"🎉 収穫完了！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を収穫登録し、AI収穫予測表から自動消去しました！")
 
 # ----------------------------------------------------
-# ⑤ AI収穫予測 (型安全キャリブレーション機能付き)
+# ⑤ AI収穫予測 (栽培管理)
 # ----------------------------------------------------
 elif menu == "AI収穫予測 (栽培管理)":
     st.header("【AI気象補正 収穫予測・栽培管理テーブル】")
@@ -380,7 +379,6 @@ elif menu == "AI収穫予測 (栽培管理)":
     kankyo_logs = select_all_kankyo()
     shukaku_logs = select_all_shukaku()
     
-    # --- 【AI精度自動補正ロジック（安全数値抽出）】 ---
     yield_accuracy_factor = 1.0
     if shukaku_logs:
         valid_weights = [get_weight_from_log(log) for log in shukaku_logs if get_weight_from_log(log) > 0]
@@ -463,7 +461,6 @@ elif menu == "AI収穫予測 (栽培管理)":
             except:
                 pass
         
-        # 多重ソート（①残日数昇順 ➔ ②ライン順 ➔ ③ベッド番号順）
         lots_data.sort(key=lambda x: (x["sort_rem_days"], x["sort_line"], x["sort_bed"]))
 
         h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7, h_col8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
@@ -497,7 +494,85 @@ elif menu == "AI収穫予測 (栽培管理)":
                     st.rerun()
 
 # ----------------------------------------------------
-# ⑥ 総合グラフ分析
+# ⑥ 収穫実績・分析（新設！一覧表・グラフ・CSV機能）
+# ----------------------------------------------------
+elif menu == "収穫実績・分析":
+    st.header("【収穫実績・分析ダッシュボード】")
+    shukaku_logs = select_all_shukaku()
+    
+    if not shukaku_logs:
+        st.warning("現在登録されている収穫データはありません。「収穫登録」メニューから登録を行ってください。")
+    else:
+        # データフレーム化
+        df_s = pd.DataFrame(shukaku_logs)
+        # カラム名の安全な初期化
+        cols = ["ID", "収穫日", "ハウス", "ベッド", "重量(g)", "株数", "品質", "備考", "登録日時"]
+        df_s = df_s.iloc[:, :len(cols)]
+        df_s.columns = cols[:len(df_s.columns)]
+        
+        st.download_button(
+            label="📥 収穫実績データをCSVダウンロード",
+            data=df_s.to_csv(index=False).encode('utf-8-sig'),
+            file_name=f"sanchu_harvest_records_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+        st.markdown("---")
+        
+        # 日別収穫量の集計とグラフ化
+        df_s["dt"] = pd.to_datetime(df_s["収穫日"].astype(str), format="%Y%m%d", errors="coerce")
+        df_s["重量(kg)"] = df_s["重量(g)"].apply(lambda x: float(x)/1000.0 if isinstance(x, (int, float)) else 0.0)
+        
+        st.subheader("1. 日別 収穫総重量の推移 (kg)")
+        df_daily = df_s.groupby("dt")["重量(kg)"].sum().reset_index()
+        
+        fig_h = go.Figure()
+        fig_h.add_trace(go.Bar(
+            x=df_daily["dt"], 
+            y=df_daily["重量(kg)"], 
+            name="収穫量(kg)", 
+            marker_color="#4caf50"
+        ))
+        fig_h.update_layout(
+            xaxis_title="収穫日", yaxis_title="収穫量 (kg)",
+            hovermode="x unified", template="plotly_dark", height=380,
+            xaxis=dict(tickformat="%m/%d")
+        )
+        st.plotly_chart(fig_h, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 収穫実績一覧表 ＆ 削除機能
+        st.subheader("2. 収穫実績データ一覧表")
+        
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
+        h1.markdown("**収穫日**")
+        h2.markdown("**栽培場所**")
+        h3.markdown("**収穫重量**")
+        h4.markdown("**品質**")
+        h5.markdown("**備考**")
+        h6.markdown("**登録日時**")
+        h7.markdown("**操作**")
+        st.markdown("---")
+        
+        for idx, row in df_s.iterrows():
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([1.5, 2.2, 1.2, 1.0, 1.5, 1.8, 0.8])
+            d_str = str(row['収穫日'])
+            date_fmt = f"{d_str[:4]}/{d_str[4:6]}/{d_str[6:]}" if len(d_str)==8 else d_str
+            
+            c1.write(date_fmt)
+            c2.write(f"{row['ハウス']} - {row['ベッド']}" if row['ハウス'] else "全体")
+            c3.write(f"{row['重量(g)']} g")
+            c4.write(row['品質'] if row['品質'] else "秀")
+            c5.write(row['備考'] if row['備考'] else "-")
+            c6.write(str(row['登録日時'])[:16] if row['登録日時'] else "-")
+            
+            if c7.button("🗑️", key=f"del_shukaku_{row['ID']}", help="この収穫記録を削除"):
+                if delete_record("shukaku", row['ID']):
+                    st.success("削除しました。")
+                    st.rerun()
+
+# ----------------------------------------------------
+# ⑦ 総合グラフ分析
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・環境データ 総合分析ダッシュボード】")
