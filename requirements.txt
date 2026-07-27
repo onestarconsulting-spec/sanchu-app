@@ -4,3 +4,4 @@ matplotlib
 openpyxl
 psycopg2-binary
 requests
+plotly
