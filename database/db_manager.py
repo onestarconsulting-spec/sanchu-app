@@ -32,7 +32,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kankyo (
             id SERIAL PRIMARY KEY,
-            date TEXT,
+            date TEXT UNIQUE,
             temp REAL, min_temp REAL, max_temp REAL,
             water_temp REAL, dli REAL, ec REAL, ph REAL, memo TEXT,
             press_land REAL, press_sea REAL,
@@ -60,15 +60,22 @@ def init_db():
         except:
             pass
 
-    # 3. 収穫テーブル
+    # 3. 収穫テーブル（ハウス・ベッド情報を追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
             id SERIAL PRIMARY KEY,
-            shukaku_date TEXT, weight REAL, quantity INTEGER,
+            shukaku_date TEXT, house TEXT, bed TEXT, weight REAL, quantity INTEGER,
             quality TEXT, memo TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # shukakuテーブルのカラム拡張
+    for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT")]:
+        try:
+            cursor.execute(f"ALTER TABLE shukaku ADD COLUMN IF NOT EXISTS {c_name} {c_type};")
+        except:
+            pass
     
     conn.commit()
     cursor.close()
@@ -86,16 +93,14 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     conn.close()
 
 def insert_kankyo_full(data_dict):
-    """気象庁データ含めた全項目の一括保存・更新（安全互換版）"""
+    """気象庁データ含めた全項目の一括保存・更新"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 該当日のデータがすでに登録されているかチェック
     cursor.execute("SELECT id FROM kankyo WHERE date = %s", (data_dict["date"],))
     exists = cursor.fetchone()
     
     if exists:
-        # すでに同じ日付がある場合は上書き更新（UPDATE）
         cursor.execute("""
             UPDATE kankyo SET
                 temp = %(temp)s, min_temp = %(min_temp)s, max_temp = %(max_temp)s,
@@ -111,7 +116,6 @@ def insert_kankyo_full(data_dict):
             WHERE date = %(date)s;
         """, data_dict)
     else:
-        # 新しい日付の場合は新規追加（INSERT）
         cursor.execute("""
             INSERT INTO kankyo (
                 date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo,
@@ -130,13 +134,23 @@ def insert_kankyo_full(data_dict):
     cursor.close()
     conn.close()
 
-def insert_shukaku(shukaku_date, weight, quantity, quality, memo):
+def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality, memo):
+    """収穫データを保存し、同時に対応する栽培中データを自動削除する"""
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # 1. 収穫テーブルへ登録
     cursor.execute("""
-        INSERT INTO shukaku (shukaku_date, weight, quantity, quality, memo)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (shukaku_date, weight, quantity, quality, memo))
+        INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """, (shukaku_date, house, bed, weight, 0, quality, memo))
+    
+    # 2. 連動する定植（栽培中）データの自動削除命令
+    cursor.execute("""
+        DELETE FROM teichaku 
+        WHERE house = %s AND bed = %s;
+    """, (house, bed))
+    
     conn.commit()
     cursor.close()
     conn.close()
