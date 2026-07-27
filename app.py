@@ -1,12 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, date
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.font_manager as fm
-import urllib.request
-import os
 import requests
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from database.db_manager import (
     init_db, 
     insert_teichaku, 
@@ -17,21 +14,6 @@ from database.db_manager import (
     select_all_shukaku,
     get_connection
 )
-
-# ----------------------------------------------------
-# 0. 日本語フォント(IPAexGothic)の自動セットアップ（エラー回避型）
-# ----------------------------------------------------
-FONT_PATH = "IPAexGothic.ttf"
-if not os.path.exists(FONT_PATH):
-    try:
-        url = "https://github.com/google/fonts/raw/main/ofl/ipaexgothic/IPAexGothic.ttf"
-        urllib.request.urlretrieve(url, FONT_PATH)
-    except:
-        pass
-
-if os.path.exists(FONT_PATH):
-    fm.fontManager.addfont(FONT_PATH)
-    plt.rcParams['font.family'] = 'IPAexGothic'
 
 # データベースの初期化
 init_db()
@@ -296,7 +278,7 @@ elif menu == "栽培一覧":
                 st.markdown("---")
 
 # ----------------------------------------------------
-# ④ 今日の環境入力（6月以降の一括取得に対応！）
+# ④ 今日の環境入力
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
     st.header("【環境・気象データ入力 (仙台気象連動)】")
@@ -431,7 +413,7 @@ elif menu == "AI収穫予測":
             st.success("💡 気象データに基づく全ロットのリアルタイム予測結果です。")
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析（日本語化・全ラベル明記・6月対応版）
+# ⑦ 総合グラフ分析（Plotly完全文字化け防止＆インタラクティブ表示）
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・環境データ 総合分析ダッシュボード】")
@@ -487,84 +469,62 @@ elif menu == "総合グラフ分析":
         st.markdown("---")
 
         if df_filtered.empty:
-            st.warning("⚠️ 選択された期間（6月等）のデータがまだ取り込まれていません。\n「今日の環境入力」画面で『6月1日〜本日の仙台気象データを一括インポートする』ボタンを押してください。")
+            st.warning("⚠️ 選択された期間のデータが見つかりません。「今日の環境入力」画面で気象データを一括インポートしてください。")
         else:
             # ------------------------------------------------
-            # 📈 1画面スクロールグラフ表示（100%日本語化＆明瞭ラベル）
+            # 📈 Plotlyインタラクティブグラフ（100%文字化けなし＆完全日本語表示）
             # ------------------------------------------------
             
             # --- グラフ1: 気温・水温 ---
             st.subheader("1. 気温 (最高/平均/最低) と ハウス水温の推移")
-            fig1, ax1 = plt.subplots(figsize=(11, 4.5))
+            fig1 = go.Figure()
+            fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["max_temp"], mode='lines+markers', name='最高気温 (℃)', line=dict(color='#e53935', dash='dash')))
+            fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["temp"], mode='lines+markers', name='平均気温 (℃)', line=dict(color='#4caf50', width=3)))
+            fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["min_temp"], mode='lines+markers', name='最低気温 (℃)', line=dict(color='#1e88e5', dash='dash')))
+            fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["water_temp"], mode='lines+markers', name='ハウス水温 (℃)', line=dict(color='#00bcd4', width=2)))
             
-            ax1.plot(df_filtered["dt"], df_filtered["max_temp"], marker="^", label="最高気温 (℃)", color="#e53935", linestyle="--", alpha=0.8)
-            ax1.plot(df_filtered["dt"], df_filtered["temp"], marker="o", label="平均気温 (℃)", color="#4caf50", linewidth=2.2)
-            ax1.plot(df_filtered["dt"], df_filtered["min_temp"], marker="v", label="最低気温 (℃)", color="#1e88e5", linestyle="--", alpha=0.8)
-            ax1.plot(df_filtered["dt"], df_filtered["water_temp"], marker="s", label="ハウス水温 (℃)", color="#00bcd4", linewidth=2.0)
-            
-            ax1.set_ylabel("温度 (℃)")
-            ax1.grid(True, linestyle=":", alpha=0.5)
-            ax1.legend(loc="upper left")
-            
-            ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
-            fig1.autofmt_xdate(bottom=0.2, rotation=45, ha='right')
-            st.pyplot(fig1)
+            fig1.update_layout(
+                xaxis_title="日付", yaxis_title="温度 (℃)",
+                hovermode="x unified", template="plotly_dark", height=420,
+                xaxis=dict(tickformat="%m/%d")
+            )
+            st.plotly_chart(fig1, use_container_width=True)
 
             st.markdown("---")
 
             # --- グラフ2: 湿度・降水量・日照時間 ---
             st.subheader("2. 湿度 (%) / 降水量 (mm) / 日照時間 (時間) の推移")
-            fig2, (ax2_h, ax2_d) = plt.subplots(2, 1, figsize=(11, 7.5), sharex=True)
+            fig2 = make_subplots(
+                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.12,
+                subplot_titles=("■ 湿度推移", "■ 降水量 と 日照時間"),
+                specs=[[{"secondary_y": False}], [{"secondary_y": True}]]
+            )
             
-            # 上段: 湿度
-            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_mean"], marker="o", label="平均湿度 (%)", color="#009688")
-            ax2_h.plot(df_filtered["dt"], df_filtered["humidity_min"], marker="x", label="最小湿度 (%)", color="#80cbc4", linestyle=":")
-            ax2_h.set_ylabel("湿度 (%)")
-            ax2_h.grid(True, linestyle=":", alpha=0.5)
-            ax2_h.legend(loc="upper left")
+            fig2.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["humidity_mean"], mode='lines+markers', name='平均湿度 (%)', line=dict(color='#009688')), row=1, col=1)
+            fig2.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["humidity_min"], mode='lines+markers', name='最小湿度 (%)', line=dict(color='#80cbc4', dash='dot')), row=1, col=1)
             
-            # 下段: 降水量と日照時間
-            bar_rain = ax2_d.bar(df_filtered["dt"], df_filtered["precip_total"], label="日降水量 (mm)", color="#2196f3", alpha=0.6, width=0.6)
-            ax2_d2 = ax2_d.twinx()
-            line_sun = ax2_d2.plot(df_filtered["dt"], df_filtered["sunshine_hours"], marker="*", label="日照時間 (時間)", color="#ff9800", linewidth=2)
+            fig2.add_trace(go.Bar(x=df_filtered["dt"], y=df_filtered["precip_total"], name='日降水量 (mm)', marker_color='#2196f3', opacity=0.6), row=2, col=1, secondary_y=False)
+            fig2.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["sunshine_hours"], mode='lines+markers', name='日照時間 (時間)', line=dict(color='#ff9800', width=2)), row=2, col=1, secondary_y=True)
             
-            ax2_d.set_ylabel("降水量 (mm)")
-            ax2_d2.set_ylabel("日照時間 (時間)", color="#ff9800")
-            ax2_d.grid(True, linestyle=":", alpha=0.5)
-            
-            # 2軸まとめ凡例
-            lines1, labels1 = ax2_d.get_legend_handles_labels()
-            lines2, labels2 = ax2_d2.get_legend_handles_labels()
-            ax2_d.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
-            
-            ax2_d.xaxis.set_major_locator(mdates.AutoDateLocator())
-            ax2_d.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
-            fig2.autofmt_xdate(bottom=0.2, rotation=45, ha='right')
-            st.pyplot(fig2)
+            fig2.update_yaxes(title_text="湿度 (%)", row=1, col=1)
+            fig2.update_yaxes(title_text="降水量 (mm)", row=2, col=1, secondary_y=False)
+            fig2.update_yaxes(title_text="日照時間 (時間)", row=2, col=1, secondary_y=True)
+            fig2.update_xaxes(tickformat="%m/%d", row=2, col=1)
+            fig2.update_layout(hovermode="x unified", template="plotly_dark", height=650)
+            st.plotly_chart(fig2, use_container_width=True)
 
             st.markdown("---")
 
             # --- グラフ3: 風速・気圧 ---
             st.subheader("3. 風速 (m/s) と 現地気圧 (hPa) の推移")
-            fig3, ax3_w = plt.subplots(figsize=(11, 4.5))
+            fig3 = make_subplots(specs=[[{"secondary_y": True}]])
             
-            line_w1 = ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_max"], marker="o", label="最大風速 (m/s)", color="#ff5722")
-            line_w2 = ax3_w.plot(df_filtered["dt"], df_filtered["wind_speed_instant"], marker="x", label="最大瞬間風速 (m/s)", color="#ffab91", linestyle="--")
-            ax3_w.set_ylabel("風速 (m/s)")
+            fig3.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["wind_speed_max"], mode='lines+markers', name='最大風速 (m/s)', line=dict(color='#ff5722')), secondary_y=False)
+            fig3.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["wind_speed_instant"], mode='lines+markers', name='最大瞬間風速 (m/s)', line=dict(color='#ffab91', dash='dash')), secondary_y=False)
+            fig3.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["press_land"], mode='lines', name='現地気圧 (hPa)', line=dict(color='#9c27b0', dash='dot')), secondary_y=True)
             
-            ax3_p = ax3_w.twinx()
-            line_p = ax3_p.plot(df_filtered["dt"], df_filtered["press_land"], label="現地気圧 (hPa)", color="#9c27b0", linestyle=":")
-            ax3_p.set_ylabel("気圧 (hPa)", color="#9c27b0")
-            
-            ax3_w.grid(True, linestyle=":", alpha=0.5)
-            
-            # まとめ凡例
-            lines3 = line_w1 + line_w2 + line_p
-            labels3 = [l.get_label() for l in lines3]
-            ax3_w.legend(lines3, labels3, loc="upper left")
-            
-            ax3_w.xaxis.set_major_locator(mdates.AutoDateLocator())
-            ax3_w.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
-            fig3.autofmt_xdate(bottom=0.2, rotation=45, ha='right')
-            st.pyplot(fig3)
+            fig3.update_yaxes(title_text="風速 (m/s)", secondary_y=False)
+            fig3.update_yaxes(title_text="気圧 (hPa)", secondary_y=True)
+            fig3.update_xaxes(tickformat="%m/%d")
+            fig3.update_layout(hovermode="x unified", template="plotly_dark", height=420)
+            st.plotly_chart(fig3, use_container_width=True)
