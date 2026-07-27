@@ -28,11 +28,11 @@ def init_db():
         )
     """)
     
-    # 2. 環境・気象データテーブル（気象庁全項目対応）
+    # 2. 環境・気象データテーブル
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kankyo (
             id SERIAL PRIMARY KEY,
-            date TEXT UNIQUE,
+            date TEXT,
             temp REAL, min_temp REAL, max_temp REAL,
             water_temp REAL, dli REAL, ec REAL, ph REAL, memo TEXT,
             press_land REAL, press_sea REAL,
@@ -45,7 +45,7 @@ def init_db():
         )
     """)
 
-    # 既存テーブルへのカラム安全追加（Supabaseの自動拡張）
+    # カラムの安全な自動追加
     columns = [
         ("press_land", "REAL"), ("press_sea", "REAL"),
         ("humidity_mean", "REAL"), ("humidity_min", "REAL"),
@@ -86,32 +86,46 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     conn.close()
 
 def insert_kankyo_full(data_dict):
-    """気象庁データ含めた全項目の一括保存・更新"""
+    """気象庁データ含めた全項目の一括保存・更新（安全互換版）"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO kankyo (
-            date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo,
-            press_land, press_sea, humidity_mean, humidity_min,
-            wind_speed_mean, wind_speed_max, wind_dir_max, wind_speed_instant, wind_dir_instant,
-            sunshine_hours, precip_total, precip_max_1h, precip_max_10m, snow_depth_sum, snow_depth_max
-        ) VALUES (
-            %(date)s, %(temp)s, %(min_temp)s, %(max_temp)s, %(water_temp)s, %(dli)s, %(ec)s, %(ph)s, %(memo)s,
-            %(press_land)s, %(press_sea)s, %(humidity_mean)s, %(humidity_min)s,
-            %(wind_speed_mean)s, %(wind_speed_max)s, %(wind_dir_max)s, %(wind_speed_instant)s, %(wind_dir_instant)s,
-            %(sunshine_hours)s, %(precip_total)s, %(precip_max_1h)s, %(precip_max_10m)s, %(snow_depth_sum)s, %(snow_depth_max)s
-        )
-        ON CONFLICT (date) DO UPDATE SET
-            temp = EXCLUDED.temp, min_temp = EXCLUDED.min_temp, max_temp = EXCLUDED.max_temp,
-            dli = EXCLUDED.dli, press_land = EXCLUDED.press_land, press_sea = EXCLUDED.press_sea,
-            humidity_mean = EXCLUDED.humidity_mean, humidity_min = EXCLUDED.humidity_min,
-            wind_speed_mean = EXCLUDED.wind_speed_mean, wind_speed_max = EXCLUDED.wind_speed_max,
-            wind_dir_max = EXCLUDED.wind_dir_max, wind_speed_instant = EXCLUDED.wind_speed_instant,
-            wind_dir_instant = EXCLUDED.wind_dir_instant, sunshine_hours = EXCLUDED.sunshine_hours,
-            precip_total = EXCLUDED.precip_total, precip_max_1h = EXCLUDED.precip_max_1h,
-            precip_max_10m = EXCLUDED.precip_max_10m, snow_depth_sum = EXCLUDED.snow_depth_sum,
-            snow_depth_max = EXCLUDED.snow_depth_max;
-    """, data_dict)
+    
+    # 該当日のデータがすでに登録されているかチェック
+    cursor.execute("SELECT id FROM kankyo WHERE date = %s", (data_dict["date"],))
+    exists = cursor.fetchone()
+    
+    if exists:
+        # すでに同じ日付がある場合は上書き更新（UPDATE）
+        cursor.execute("""
+            UPDATE kankyo SET
+                temp = %(temp)s, min_temp = %(min_temp)s, max_temp = %(max_temp)s,
+                water_temp = %(water_temp)s, dli = %(dli)s, ec = %(ec)s, ph = %(ph)s, memo = %(memo)s,
+                press_land = %(press_land)s, press_sea = %(press_sea)s,
+                humidity_mean = %(humidity_mean)s, humidity_min = %(humidity_min)s,
+                wind_speed_mean = %(wind_speed_mean)s, wind_speed_max = %(wind_speed_max)s,
+                wind_dir_max = %(wind_dir_max)s, wind_speed_instant = %(wind_speed_instant)s,
+                wind_dir_instant = %(wind_dir_instant)s, sunshine_hours = %(sunshine_hours)s,
+                precip_total = %(precip_total)s, precip_max_1h = %(precip_max_1h)s,
+                precip_max_10m = %(precip_max_10m)s, snow_depth_sum = %(snow_depth_sum)s,
+                snow_depth_max = %(snow_depth_max)s
+            WHERE date = %(date)s;
+        """, data_dict)
+    else:
+        # 新しい日付の場合は新規追加（INSERT）
+        cursor.execute("""
+            INSERT INTO kankyo (
+                date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo,
+                press_land, press_sea, humidity_mean, humidity_min,
+                wind_speed_mean, wind_speed_max, wind_dir_max, wind_speed_instant, wind_dir_instant,
+                sunshine_hours, precip_total, precip_max_1h, precip_max_10m, snow_depth_sum, snow_depth_max
+            ) VALUES (
+                %(date)s, %(temp)s, %(min_temp)s, %(max_temp)s, %(water_temp)s, %(dli)s, %(ec)s, %(ph)s, %(memo)s,
+                %(press_land)s, %(press_sea)s, %(humidity_mean)s, %(humidity_min)s,
+                %(wind_speed_mean)s, %(wind_speed_max)s, %(wind_dir_max)s, %(wind_speed_instant)s, %(wind_dir_instant)s,
+                %(sunshine_hours)s, %(precip_total)s, %(precip_max_1h)s, %(precip_max_10m)s, %(snow_depth_sum)s, %(snow_depth_max)s
+            );
+        """, data_dict)
+        
     conn.commit()
     cursor.close()
     conn.close()
