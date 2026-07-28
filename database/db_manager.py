@@ -14,7 +14,7 @@ def get_connection():
     )
 
 def init_db():
-    """テーブルを作成・拡張する"""
+    """テーブルを作成・拡張し、過去の偽データを一括クリーンアップする"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -41,6 +41,7 @@ def init_db():
             wind_speed_instant REAL, wind_dir_instant TEXT,
             sunshine_hours REAL, precip_total REAL, precip_max_1h REAL, precip_max_10m REAL,
             snow_depth_sum REAL, snow_depth_max REAL,
+            house_temp REAL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -51,7 +52,8 @@ def init_db():
         ("wind_speed_mean", "REAL"), ("wind_speed_max", "REAL"), ("wind_dir_max", "TEXT"),
         ("wind_speed_instant", "REAL"), ("wind_dir_instant", "TEXT"),
         ("sunshine_hours", "REAL"), ("precip_total", "REAL"), ("precip_max_1h", "REAL"), ("precip_max_10m", "REAL"),
-        ("snow_depth_sum", "REAL"), ("snow_depth_max", "REAL")
+        ("snow_depth_sum", "REAL"), ("snow_depth_max", "REAL"),
+        ("house_temp", "REAL")
     ]
     for col_name, col_type in columns:
         try:
@@ -59,7 +61,17 @@ def init_db():
         except:
             pass
 
-    # 3. 収穫テーブル（品種カラムを追加）
+    # 過去の自動通信で誤って入った手動入力項目（偽の水温・EC・pH）をNULL（未入力）にリセット
+    try:
+        cursor.execute("""
+            UPDATE kankyo 
+            SET water_temp = NULL, ec = NULL, ph = NULL 
+            WHERE memo LIKE '%気象%' AND (ec = 1.2 OR ec IS NULL) AND (ph = 6.5 OR ph IS NULL);
+        """)
+    except:
+        pass
+
+    # 3. 収穫テーブル
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
             id SERIAL PRIMARY KEY,
@@ -90,7 +102,8 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     cursor.close()
     conn.close()
 
-def insert_kankyo_full(data_dict):
+def sync_auto_climate_data(data_dict):
+    """外気象データのみを同期。手動項目（ハウス内気温・水温・EC・pH）は一切触らない"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -101,8 +114,7 @@ def insert_kankyo_full(data_dict):
         cursor.execute("""
             UPDATE kankyo SET
                 temp = %(temp)s, min_temp = %(min_temp)s, max_temp = %(max_temp)s,
-                water_temp = %(water_temp)s, dli = %(dli)s, ec = %(ec)s, ph = %(ph)s, memo = %(memo)s,
-                press_land = %(press_land)s, press_sea = %(press_sea)s,
+                dli = %(dli)s, press_land = %(press_land)s, press_sea = %(press_sea)s,
                 humidity_mean = %(humidity_mean)s, humidity_min = %(humidity_min)s,
                 wind_speed_mean = %(wind_speed_mean)s, wind_speed_max = %(wind_speed_max)s,
                 wind_dir_max = %(wind_dir_max)s, wind_speed_instant = %(wind_speed_instant)s,
@@ -115,12 +127,12 @@ def insert_kankyo_full(data_dict):
     else:
         cursor.execute("""
             INSERT INTO kankyo (
-                date, temp, min_temp, max_temp, water_temp, dli, ec, ph, memo,
+                date, temp, min_temp, max_temp, dli, memo,
                 press_land, press_sea, humidity_mean, humidity_min,
                 wind_speed_mean, wind_speed_max, wind_dir_max, wind_speed_instant, wind_dir_instant,
                 sunshine_hours, precip_total, precip_max_1h, precip_max_10m, snow_depth_sum, snow_depth_max
             ) VALUES (
-                %(date)s, %(temp)s, %(min_temp)s, %(max_temp)s, %(water_temp)s, %(dli)s, %(ec)s, %(ph)s, %(memo)s,
+                %(date)s, %(temp)s, %(min_temp)s, %(max_temp)s, %(dli)s, '気象庁自動同期',
                 %(press_land)s, %(press_sea)s, %(humidity_mean)s, %(humidity_min)s,
                 %(wind_speed_mean)s, %(wind_speed_max)s, %(wind_dir_max)s, %(wind_speed_instant)s, %(wind_dir_instant)s,
                 %(sunshine_hours)s, %(precip_total)s, %(precip_max_1h)s, %(precip_max_10m)s, %(snow_depth_sum)s, %(snow_depth_max)s
@@ -131,22 +143,43 @@ def insert_kankyo_full(data_dict):
     cursor.close()
     conn.close()
 
+def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, memo):
+    """手動入力のハウス個別データを保存・更新"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id FROM kankyo WHERE date = %s", (date_str,))
+    exists = cursor.fetchone()
+    
+    if exists:
+        cursor.execute("""
+            UPDATE kankyo SET
+                house_temp = %s, water_temp = %s, ec = %s, ph = %s, memo = %s
+            WHERE date = %s;
+        """, (house_temp, water_temp, ec, ph, memo, date_str))
+    else:
+        cursor.execute("""
+            INSERT INTO kankyo (date, house_temp, water_temp, ec, ph, memo)
+            VALUES (%s, %s, %s, %s, %s, %s);
+        """, (date_str, house_temp, water_temp, ec, ph, memo))
+        
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality, memo):
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 該当ベッドの品種(variety)を定植テーブルから取得
     cursor.execute("SELECT variety FROM teichaku WHERE house = %s AND bed = %s ORDER BY id DESC LIMIT 1;", (house, bed))
     row = cursor.fetchone()
     variety = row[0] if row and row[0] else "サンチュ"
     
-    # 1. 収穫テーブルへ保存（品種付き）
     cursor.execute("""
         INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo, variety)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """, (shukaku_date, house, bed, weight, 0, quality, memo, variety))
     
-    # 2. 定植テーブルから自動消去
     cursor.execute("""
         DELETE FROM teichaku 
         WHERE house = %s AND bed = %s;
