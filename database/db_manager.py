@@ -1,6 +1,7 @@
 import psycopg2
 import os
 import pandas as pd
+import hashlib
 import streamlit as st
 
 def get_connection():
@@ -13,11 +14,35 @@ def get_connection():
         password=st.secrets["postgres"]["password"]
     )
 
+def hash_password(password):
+    """パスワードをSHA-256で安全にハッシュ暗号化"""
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
 def init_db():
-    """テーブルを作成・拡張し、過去の偽データを一括完全削除する"""
+    """テーブルを作成・拡張し、初期管理者ユーザーを用意する"""
     conn = get_connection()
     cursor = conn.cursor()
     
+    # 0. ユーザー管理テーブル（ID・ハッシュ化PW・権限）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    
+    # 初期管理者アカウント (admin / admin123) の自動作成
+    cursor.execute("SELECT id FROM users WHERE username = 'admin';")
+    if not cursor.fetchone():
+        default_hash = hash_password("admin123")
+        cursor.execute("""
+            INSERT INTO users (username, password_hash, role)
+            VALUES ('admin', %s, 'admin');
+        """, (default_hash,))
+
     # 1. 定植テーブル
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS teichaku (
@@ -61,16 +86,6 @@ def init_db():
         except:
             pass
 
-    # ★【強力クリーンアップ】手動入力（memo='手動入力'）以外の過去の偽水温・EC・pHデータを強制クリア
-    try:
-        cursor.execute("""
-            UPDATE kankyo 
-            SET water_temp = NULL, ec = NULL, ph = NULL, house_temp = NULL
-            WHERE memo IS NULL OR memo NOT LIKE '%手動入力%';
-        """)
-    except:
-        pass
-
     # 3. 収穫テーブル
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
@@ -91,6 +106,59 @@ def init_db():
     cursor.close()
     conn.close()
 
+# ----------------------------------------------------
+# ユーザー認証・管理用関数
+# ----------------------------------------------------
+def authenticate_user(username, password):
+    """ログイン認証（成功時にユーザー情報を返す）"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    p_hash = hash_password(password)
+    cursor.execute("SELECT id, username, role FROM users WHERE username = %s AND password_hash = %s;", (username, p_hash))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if user:
+        return {"id": user[0], "username": user[1], "role": user[2]}
+    return None
+
+def insert_user(username, password, role="user"):
+    """新規ユーザー追加"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    p_hash = hash_password(password)
+    try:
+        cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s);", (username, p_hash, role))
+        conn.commit()
+        res = True
+    except Exception as e:
+        res = False
+    cursor.close()
+    conn.close()
+    return res
+
+def select_all_users():
+    """全ユーザー一覧取得"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, role, created_at FROM users ORDER BY id ASC;")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+def delete_user(user_id):
+    """ユーザー削除"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE id = %s;", (user_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+# ----------------------------------------------------
+# 各種データ操作関数
+# ----------------------------------------------------
 def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo):
     conn = get_connection()
     cursor = conn.cursor()
@@ -103,10 +171,8 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     conn.close()
 
 def sync_auto_climate_data(data_dict):
-    """外気象データのみを更新（水温・ハウス内気温・EC・pHは一切流し込まない）"""
     conn = get_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT id FROM kankyo WHERE date = %s", (data_dict["date"],))
     exists = cursor.fetchone()
     
@@ -144,12 +210,9 @@ def sync_auto_climate_data(data_dict):
     conn.close()
 
 def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, user_memo):
-    """手動入力のハウス個別データを安全に保存（memo='手動入力' フラグを付与）"""
     conn = get_connection()
     cursor = conn.cursor()
-    
     memo_str = f"手動入力: {user_memo}" if user_memo else "手動入力"
-    
     cursor.execute("SELECT id FROM kankyo WHERE date = %s", (date_str,))
     exists = cursor.fetchone()
     
