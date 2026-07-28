@@ -15,7 +15,7 @@ def get_connection():
     )
 
 def hash_password(password):
-    """パスワードをSHA-256で安全にハッシュ暗号化"""
+    """パスワードをSHA-256でハッシュ暗号化"""
     return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
 def init_db():
@@ -23,37 +23,50 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 0. ユーザー管理テーブル（ID・ハッシュ化PW・権限）
+    # 0. ユーザー管理テーブル（display_name追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'user',
+            display_name TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
     
-    # 初期管理者アカウント (admin / admin123) の自動作成
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT;")
+    except:
+        pass
+        
+    # 初期管理者アカウント (admin / admin123 / 管理者)
     cursor.execute("SELECT id FROM users WHERE username = 'admin';")
     if not cursor.fetchone():
         default_hash = hash_password("admin123")
         cursor.execute("""
-            INSERT INTO users (username, password_hash, role)
-            VALUES ('admin', %s, 'admin');
+            INSERT INTO users (username, password_hash, role, display_name)
+            VALUES ('admin', %s, 'admin', '管理者');
         """, (default_hash,))
+    else:
+        cursor.execute("UPDATE users SET display_name = '管理者' WHERE username = 'admin' AND (display_name IS NULL OR display_name = '');")
 
-    # 1. 定植テーブル
+    # 1. 定植テーブル（created_by追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS teichaku (
             id SERIAL PRIMARY KEY,
             variety TEXT, house TEXT, bed TEXT, plant_date TEXT,
             quantity INTEGER, target_size TEXT, memo TEXT,
+            created_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE teichaku ADD COLUMN IF NOT EXISTS created_by TEXT;")
+    except:
+        pass
     
-    # 2. 環境・気象データテーブル
+    # 2. 環境・気象データテーブル（created_by追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kankyo (
             id SERIAL PRIMARY KEY,
@@ -66,7 +79,7 @@ def init_db():
             wind_speed_instant REAL, wind_dir_instant TEXT,
             sunshine_hours REAL, precip_total REAL, precip_max_1h REAL, precip_max_10m REAL,
             snow_depth_sum REAL, snow_depth_max REAL,
-            house_temp REAL,
+            house_temp REAL, created_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -78,7 +91,7 @@ def init_db():
         ("wind_speed_instant", "REAL"), ("wind_dir_instant", "TEXT"),
         ("sunshine_hours", "REAL"), ("precip_total", "REAL"), ("precip_max_1h", "REAL"), ("precip_max_10m", "REAL"),
         ("snow_depth_sum", "REAL"), ("snow_depth_max", "REAL"),
-        ("house_temp", "REAL")
+        ("house_temp", "REAL"), ("created_by", "TEXT")
     ]
     for col_name, col_type in columns:
         try:
@@ -86,17 +99,27 @@ def init_db():
         except:
             pass
 
-    # 3. 収穫テーブル
+    # クリーンアップ
+    try:
+        cursor.execute("""
+            UPDATE kankyo 
+            SET water_temp = NULL, ec = NULL, ph = NULL, house_temp = NULL
+            WHERE memo IS NULL OR memo NOT LIKE '%手動入力%';
+        """)
+    except:
+        pass
+
+    # 3. 収穫テーブル（created_by追加）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shukaku (
             id SERIAL PRIMARY KEY,
             shukaku_date TEXT, house TEXT, bed TEXT, weight REAL, quantity INTEGER,
-            quality TEXT, memo TEXT, variety TEXT,
+            quality TEXT, memo TEXT, variety TEXT, created_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
-    for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT"), ("variety", "TEXT")]:
+    for c_name, c_type in [("house", "TEXT"), ("bed", "TEXT"), ("variety", "TEXT"), ("created_by", "TEXT")]:
         try:
             cursor.execute(f"ALTER TABLE shukaku ADD COLUMN IF NOT EXISTS {c_name} {c_type};")
         except:
@@ -110,25 +133,26 @@ def init_db():
 # ユーザー認証・管理用関数
 # ----------------------------------------------------
 def authenticate_user(username, password):
-    """ログイン認証（成功時にユーザー情報を返す）"""
+    """ログイン認証（氏名display_nameも含めて返す）"""
     conn = get_connection()
     cursor = conn.cursor()
     p_hash = hash_password(password)
-    cursor.execute("SELECT id, username, role FROM users WHERE username = %s AND password_hash = %s;", (username, p_hash))
+    cursor.execute("SELECT id, username, role, COALESCE(display_name, username) FROM users WHERE username = %s AND password_hash = %s;", (username, p_hash))
     user = cursor.fetchone()
     cursor.close()
     conn.close()
     if user:
-        return {"id": user[0], "username": user[1], "role": user[2]}
+        return {"id": user[0], "username": user[1], "role": user[2], "display_name": user[3]}
     return None
 
-def insert_user(username, password, role="user"):
-    """新規ユーザー追加"""
+def insert_user(username, password, role="user", display_name=""):
+    """新規ユーザー追加（氏名保存対応）"""
     conn = get_connection()
     cursor = conn.cursor()
     p_hash = hash_password(password)
+    disp = display_name if display_name else username
     try:
-        cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s);", (username, p_hash, role))
+        cursor.execute("INSERT INTO users (username, password_hash, role, display_name) VALUES (%s, %s, %s, %s);", (username, p_hash, role, disp))
         conn.commit()
         res = True
     except Exception as e:
@@ -141,14 +165,13 @@ def select_all_users():
     """全ユーザー一覧取得"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, role, created_at FROM users ORDER BY id ASC;")
+    cursor.execute("SELECT id, username, role, COALESCE(display_name, username), created_at FROM users ORDER BY id ASC;")
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
     return rows
 
 def delete_user(user_id):
-    """ユーザー削除"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM users WHERE id = %s;", (user_id,))
@@ -157,15 +180,15 @@ def delete_user(user_id):
     conn.close()
 
 # ----------------------------------------------------
-# 各種データ操作関数
+# 各種データ操作関数（自動で操作者氏名を記録）
 # ----------------------------------------------------
-def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo):
+def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo, created_by=""):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO teichaku (variety, house, bed, plant_date, quantity, target_size, memo)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (variety, house, bed, plant_date, quantity, target_size, memo))
+        INSERT INTO teichaku (variety, house, bed, plant_date, quantity, target_size, memo, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (variety, house, bed, plant_date, quantity, target_size, memo, created_by))
     conn.commit()
     cursor.close()
     conn.close()
@@ -209,7 +232,7 @@ def sync_auto_climate_data(data_dict):
     cursor.close()
     conn.close()
 
-def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, user_memo):
+def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, user_memo, created_by=""):
     conn = get_connection()
     cursor = conn.cursor()
     memo_str = f"手動入力: {user_memo}" if user_memo else "手動入力"
@@ -219,20 +242,20 @@ def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, user_me
     if exists:
         cursor.execute("""
             UPDATE kankyo SET
-                house_temp = %s, water_temp = %s, ec = %s, ph = %s, memo = %s
+                house_temp = %s, water_temp = %s, ec = %s, ph = %s, memo = %s, created_by = %s
             WHERE date = %s;
-        """, (house_temp, water_temp, ec, ph, memo_str, date_str))
+        """, (house_temp, water_temp, ec, ph, memo_str, created_by, date_str))
     else:
         cursor.execute("""
-            INSERT INTO kankyo (date, house_temp, water_temp, ec, ph, memo)
-            VALUES (%s, %s, %s, %s, %s, %s);
-        """, (date_str, house_temp, water_temp, ec, ph, memo_str))
+            INSERT INTO kankyo (date, house_temp, water_temp, ec, ph, memo, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """, (date_str, house_temp, water_temp, ec, ph, memo_str, created_by))
         
     conn.commit()
     cursor.close()
     conn.close()
 
-def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality, memo):
+def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality, memo, created_by=""):
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -241,9 +264,9 @@ def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality,
     variety = row[0] if row and row[0] else "サンチュ"
     
     cursor.execute("""
-        INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo, variety)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (shukaku_date, house, bed, weight, 0, quality, memo, variety))
+        INSERT INTO shukaku (shukaku_date, house, bed, weight, quantity, quality, memo, variety, created_by)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (shukaku_date, house, bed, weight, 0, quality, memo, variety, created_by))
     
     cursor.execute("""
         DELETE FROM teichaku 
@@ -257,7 +280,7 @@ def insert_shukaku_and_clear_teichaku(shukaku_date, house, bed, weight, quality,
 def select_all_teichaku():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM teichaku ORDER BY id DESC")
+    cursor.execute("SELECT id, variety, house, bed, plant_date, quantity, target_size, memo, created_at, COALESCE(created_by, '') FROM teichaku ORDER BY id DESC")
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -276,7 +299,7 @@ def select_all_shukaku():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, shukaku_date, house, bed, weight, quantity, quality, memo, created_at, variety 
+        SELECT id, shukaku_date, house, bed, weight, quantity, quality, memo, created_at, variety, COALESCE(created_by, '') 
         FROM shukaku 
         ORDER BY id DESC
     """)
