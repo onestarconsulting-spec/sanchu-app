@@ -31,7 +31,7 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
-# ⚡ バックグラウンド非同期＆スマート差分同期
+# ⚡ 爆速化：バックグラウンド非同期＆スマート差分同期
 # ----------------------------------------------------
 def bg_smart_climate_sync():
     today_str = datetime.now().strftime("%Y%m%d")
@@ -113,7 +113,7 @@ if "user_info" not in st.session_state:
 st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
 
 # ----------------------------------------------------
-# 🔐 ログイン画面（案内文削除済み）
+# 🔐 ログイン画面
 # ----------------------------------------------------
 if not st.session_state["logged_in"]:
     st.title("🔑 サンチュ栽培管理システム ログイン")
@@ -873,7 +873,7 @@ elif menu == "👥 ユーザー・権限管理" and is_admin:
                 u_col2.write(r_label)
                 
                 if u_name != "admin":
-                    if u_col3.button("🗑️ 削除", key=f_del_u_{u_id}"):
+                    if u_col3.button("🗑️ 削除", key=f"del_u_{u_id}"):
                         delete_user(u_id)
                         st.success(f"ユーザー `{u_disp}` を削除しました。")
                         st.rerun()
