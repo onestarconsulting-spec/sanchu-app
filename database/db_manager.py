@@ -14,7 +14,7 @@ def get_connection():
     )
 
 def init_db():
-    """テーブルを作成・拡張し、過去の偽データを一括クリーンアップする"""
+    """テーブルを作成・拡張し、過去の偽データを一括完全削除する"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -61,12 +61,12 @@ def init_db():
         except:
             pass
 
-    # 過去の自動通信で誤って入った手動入力項目（偽の水温・EC・pH）をNULL（未入力）にリセット
+    # ★【強力クリーンアップ】手動入力（memo='手動入力'）以外の過去の偽水温・EC・pHデータを強制クリア
     try:
         cursor.execute("""
             UPDATE kankyo 
-            SET water_temp = NULL, ec = NULL, ph = NULL 
-            WHERE memo LIKE '%気象%' AND (ec = 1.2 OR ec IS NULL) AND (ph = 6.5 OR ph IS NULL);
+            SET water_temp = NULL, ec = NULL, ph = NULL, house_temp = NULL
+            WHERE memo IS NULL OR memo NOT LIKE '%手動入力%';
         """)
     except:
         pass
@@ -103,7 +103,7 @@ def insert_teichaku(variety, house, bed, plant_date, quantity, target_size, memo
     conn.close()
 
 def sync_auto_climate_data(data_dict):
-    """外気象データのみを同期。手動項目（ハウス内気温・水温・EC・pH）は一切触らない"""
+    """外気象データのみを更新（水温・ハウス内気温・EC・pHは一切流し込まない）"""
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -143,10 +143,12 @@ def sync_auto_climate_data(data_dict):
     cursor.close()
     conn.close()
 
-def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, memo):
-    """手動入力のハウス個別データを保存・更新"""
+def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, user_memo):
+    """手動入力のハウス個別データを安全に保存（memo='手動入力' フラグを付与）"""
     conn = get_connection()
     cursor = conn.cursor()
+    
+    memo_str = f"手動入力: {user_memo}" if user_memo else "手動入力"
     
     cursor.execute("SELECT id FROM kankyo WHERE date = %s", (date_str,))
     exists = cursor.fetchone()
@@ -156,12 +158,12 @@ def update_house_manual_kankyo(date_str, house_temp, water_temp, ec, ph, memo):
             UPDATE kankyo SET
                 house_temp = %s, water_temp = %s, ec = %s, ph = %s, memo = %s
             WHERE date = %s;
-        """, (house_temp, water_temp, ec, ph, memo, date_str))
+        """, (house_temp, water_temp, ec, ph, memo_str, date_str))
     else:
         cursor.execute("""
             INSERT INTO kankyo (date, house_temp, water_temp, ec, ph, memo)
             VALUES (%s, %s, %s, %s, %s, %s);
-        """, (date_str, house_temp, water_temp, ec, ph, memo))
+        """, (date_str, house_temp, water_temp, ec, ph, memo_str))
         
     conn.commit()
     cursor.close()
