@@ -18,7 +18,7 @@ from database.db_manager import (
     get_connection
 )
 
-# データベースの初期化
+# データベースの初期化＆過去の偽データ自動一括削除
 init_db()
 
 # 仙台の観測座標
@@ -26,7 +26,7 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
-# ログイン時（起動時）の仙台気象データ自動全同期（手動データは一切非破壊）
+# ログイン時（起動時）の仙台気象データ自動全同期（外気象のみ）
 # ----------------------------------------------------
 @st.cache_data(ttl=3600)
 def auto_sync_climate():
@@ -263,12 +263,11 @@ elif menu == "定植登録":
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
     st.header("【ハウス内環境データ入力】")
-    st.info("💡 仙台の外気象データ（気温・湿度・風速・気圧等）は**ログイン時に全自動で更新**されています。\nここでは測定した**ハウス内気温・ハウス水温・EC・pH**を入力してください。")
+    st.info("💡 仙台の外気象データ（気温・湿度・風速・気圧等）は**ログイン時に全自動で更新**されています。\nここでは実際に測定した**ハウス内気温・ハウス水温・EC・pH**を入力してください。")
     
     kankyo_logs = select_all_kankyo()
     def_htemp, def_water, def_ec, def_ph = 25.0, 20.0, 1.2, 6.5
     
-    # 過去データから初期値を取得（数値が存在するもの）
     if kankyo_logs:
         for log in kankyo_logs:
             if len(log) > 24 and log[24] is not None:
@@ -623,7 +622,7 @@ elif menu == "収穫実績・分析":
                         st.rerun()
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析（手動未入力項目は完全にプロット除外）
+# ⑦ 総合グラフ分析（手動入力分のみ厳密プロット版）
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・ハウス環境データ 総合分析ダッシュボード】")
@@ -679,14 +678,14 @@ elif menu == "総合グラフ分析":
         if df_filtered.empty:
             st.warning("⚠️ 選択された期間のデータが見つかりません。")
         else:
-            # --- グラフ1: 外気気温・ハウス環境（手動入力分のみ） ---
+            # --- グラフ1: 外気気温 ＆ ハウス内気温・水温 ---
             st.subheader("1. 気温 (外気最高/平均/最低) と ハウス内気温・水温の推移")
             fig1 = go.Figure()
             fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["max_temp"], mode='lines+markers', name='外気・最高気温 (℃)', line=dict(color='#e53935', dash='dash')))
             fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["temp"], mode='lines+markers', name='外気・平均気温 (℃)', line=dict(color='#4caf50', width=2)))
             fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["min_temp"], mode='lines+markers', name='外気・最低気温 (℃)', line=dict(color='#1e88e5', dash='dash')))
             
-            # 手動プロット（Noneでないデータのみ）
+            # 手動入力分のみプロット
             df_ht = df_filtered.dropna(subset=["house_temp"])
             if not df_ht.empty:
                 fig1.add_trace(go.Scatter(x=df_ht["dt"], y=df_ht["house_temp"], mode='lines+markers', name='🏠 ハウス内気温 (℃)', line=dict(color='#ff9800', width=3)))
@@ -701,6 +700,9 @@ elif menu == "総合グラフ分析":
                 xaxis=dict(tickformat="%m/%d")
             )
             st.plotly_chart(fig1, use_container_width=True)
+
+            if df_ht.empty and df_wt.empty:
+                st.caption("※ 🏠ハウス内気温 および 💧ハウス水温 は『今日の環境入力』メニューから手動保存した日のみグラフ上にドット描画されます。")
 
             st.markdown("---")
 
@@ -743,8 +745,8 @@ elif menu == "総合グラフ分析":
 
             st.markdown("---")
 
-            # --- グラフ4: 培養液 (EC / pH) の推移 [手動測定日のみ表示] ---
-            st.subheader("4. ハウス培養液 (EC / pH) の推移 [手動測定データ]")
+            # --- グラフ4: 培養液 (EC / pH) の推移 ---
+            st.subheader("4. ハウス培養液 (EC / pH) の推移 [手動測定データのみ]")
             
             df_ec_ph = df_filtered.dropna(subset=["ec", "ph"], how="all")
             
