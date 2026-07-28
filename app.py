@@ -8,6 +8,10 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from database.db_manager import (
     init_db, 
+    authenticate_user,
+    insert_user,
+    select_all_users,
+    delete_user,
     insert_teichaku, 
     select_all_teichaku, 
     sync_auto_climate_data,
@@ -18,7 +22,7 @@ from database.db_manager import (
     get_connection
 )
 
-# データベースの初期化＆過去の偽データ自動一括削除
+# データベースの初期化（初期管理者アカウント作成）
 init_db()
 
 # 仙台の観測座標
@@ -26,13 +30,50 @@ SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
 # ----------------------------------------------------
-# ログイン時（起動時）の仙台気象データ自動全同期（外気象のみ）
+# ログイン状態のセッション管理
 # ----------------------------------------------------
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "user_info" not in st.session_state:
+    st.session_state["user_info"] = None
+
+# 画面設定
+st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
+
+# ----------------------------------------------------
+# 🔐 未ログイン時の「ログイン画面」
+# ----------------------------------------------------
+if not st.session_state["logged_in"]:
+    st.title("🔑 サンチュ栽培管理システム ログイン")
+    st.write("システムを利用するには、IDとパスワードを入力してログインしてください。")
+    
+    with st.form("login_form"):
+        username_input = st.text_input("ユーザーID (ユーザー名)")
+        password_input = st.text_input("パスワード", type="password")
+        submit_login = st.form_submit_button("ログイン")
+        
+        if submit_login:
+            user = authenticate_user(username_input, password_input)
+            if user:
+                st.session_state["logged_in"] = True
+                st.session_state["user_info"] = user
+                st.success(f"ログイン成功！ ようこそ {user['username']} 様 ({'👑管理者' if user['role']=='admin' else '🌱一般スタッフ'})")
+                st.rerun()
+            else:
+                st.error("⚠️ ユーザーIDまたはパスワードが正しくありません。")
+    
+    st.info("💡 初期管理者アカウント\n・ユーザーID: `admin` \n・パスワード: `admin123`")
+    st.stop()  # ログインするまでこれ以降のコードを実行させない
+
+# ----------------------------------------------------
+# 🔓 ログイン後のメインアプリケーション
+# ----------------------------------------------------
+
+# 仙台気象データの自動同期（1時間キャッシュ）
 @st.cache_data(ttl=3600)
 def auto_sync_climate():
     start_date_str = "2026-06-01"
     end_date_str = datetime.now().strftime("%Y-%m-%d")
-    
     url = (
         f"https://api.open-meteo.com/v1/forecast?"
         f"latitude={SENDAI_LAT}&longitude={SENDAI_LON}&"
@@ -43,7 +84,6 @@ def auto_sync_climate():
         f"wind_direction_10m_dominant,sunshine_duration,precipitation_sum,"
         f"shortwave_radiation_sum&timezone=Asia%2FTokyo"
     )
-    
     try:
         response = requests.get(url, timeout=10)
         data = response.json().get("daily", {})
@@ -59,15 +99,12 @@ def auto_sync_climate():
             t_mean = round(data["temperature_2m_mean"][i], 1) if data["temperature_2m_mean"][i] is not None else 25.0
             t_max = round(data["temperature_2m_max"][i], 1) if data["temperature_2m_max"][i] is not None else 30.0
             t_min = round(data["temperature_2m_min"][i], 1) if data["temperature_2m_min"][i] is not None else 20.0
-            
             h_mean = round(data["relative_humidity_2m_mean"][i], 1) if data["relative_humidity_2m_mean"][i] is not None else 75.0
             h_min = round(data["relative_humidity_2m_min"][i], 1) if data["relative_humidity_2m_min"][i] is not None else 50.0
-            
             press = round(data["surface_pressure_mean"][i], 1) if data["surface_pressure_mean"][i] is not None else 1013.2
             w_max = round(data["wind_speed_10m_max"][i] / 3.6, 1) if data["wind_speed_10m_max"][i] is not None else 3.0
             w_gust = round(data["wind_gusts_10m_max"][i] / 3.6, 1) if data["wind_gusts_10m_max"][i] is not None else 5.0
             w_dir = deg_to_compass(data["wind_direction_10m_dominant"][i]) if data["wind_direction_10m_dominant"][i] is not None else "東"
-            
             sun_hours = round(data["sunshine_duration"][i] / 3600.0, 1) if data["sunshine_duration"][i] is not None else 6.0
             precip = round(data["precipitation_sum"][i], 1) if data["precipitation_sum"][i] is not None else 0.0
             rad = data["shortwave_radiation_sum"][i] if data["shortwave_radiation_sum"][i] is not None else 12.0
@@ -99,7 +136,6 @@ def get_today_weather():
         weather_code = data["daily"]["weathercode"][0]
         max_temp = data["daily"]["temperature_2m_max"][0]
         min_temp = data["daily"]["temperature_2m_min"][0]
-        
         weather_map = {
             0: "☀️ 晴天", 1: "🌤️ おおむね晴れ", 2: "⛅ 時々曇り", 3: "☁️ 曇り",
             45: "🌫️ 霧", 48: "🌫️ 霧", 51: "🌧️ 霧雨", 61: "☔ 雨", 80: "🌦️ にわか雨", 95: "⚡ 雷雨"
@@ -121,13 +157,26 @@ def delete_record(table_name, record_id):
         st.error(f"削除エラー: {e}")
         return False
 
-st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
-st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
+# サイドバー設定（ログイン情報＆ログアウトボタン）
+current_user = st.session_state["user_info"]
+is_admin = (current_user["role"] == "admin")
 
-menu = st.sidebar.radio(
-    "メニュー切り替え",
-    ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "収穫実績・分析", "総合グラフ分析"]
-)
+st.sidebar.markdown(f"👤 **ログイン中**: `{current_user['username']}` （{'👑管理者' if is_admin else '🌱一般スタッフ'}）")
+if st.sidebar.button("🚪 ログアウト"):
+    st.session_state["logged_in"] = False
+    st.session_state["user_info"] = None
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+# メニューリスト（管理者のみ「ユーザー・権限管理」を表示）
+menu_options = ["ホーム・本日の状況", "定植登録", "今日の環境入力", "収穫登録", "AI収穫予測 (栽培管理)", "収穫実績・分析", "総合グラフ分析"]
+if is_admin:
+    menu_options.append("👥 ユーザー・権限管理")
+
+menu = st.sidebar.radio("メニュー切り替え", menu_options)
+
+st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
 
 # ----------------------------------------------------
 # ① ホーム・本日の状況
@@ -259,7 +308,7 @@ elif menu == "定植登録":
                 st.success(f"🎉 大成功！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を一括登録しました！")
 
 # ----------------------------------------------------
-# ③ 今日の環境入力（ハウス測定値の手動入力）
+# ③ 今日の環境入力
 # ----------------------------------------------------
 elif menu == "今日の環境入力":
     st.header("【ハウス内環境データ入力】")
@@ -345,7 +394,7 @@ elif menu == "収穫登録":
                 st.success(f"🎉 収穫完了！ {house} の {len(lines)}ライン × {len(beds)}ベッド（計 {count} 件）を収穫登録しました！")
 
 # ----------------------------------------------------
-# ⑤ AI収穫予測 (栽培管理)
+# ⑤ AI収穫予測 (栽培管理) - 削除は管理者のみ許可
 # ----------------------------------------------------
 elif menu == "AI収穫予測 (栽培管理)":
     st.header("【AI気象補正 収穫予測・栽培管理テーブル】")
@@ -437,35 +486,40 @@ elif menu == "AI収穫予測 (栽培管理)":
         
         lots_data.sort(key=lambda x: (x["sort_rem_days"], x["sort_line"], x["sort_bed"]))
 
-        h_col1, h_col2, h_col3, h_col4, h_col5, h_col6, h_col7, h_col8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
-        h_col1.markdown("**栽培場所**")
-        h_col2.markdown("**品種**")
-        h_col3.markdown("**株数**")
-        h_col4.markdown("**AI生育率**")
-        h_col5.markdown("**推定重量**")
-        h_col6.markdown("**予測収穫日**")
-        h_col7.markdown("**適期まで**")
-        h_col8.markdown("**操作**")
+        col_widths = [2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2]
+        if is_admin: col_widths.append(0.8) # 管理者のみ操作列枠を追加
+        
+        h_cols = st.columns(col_widths)
+        h_cols[0].markdown("**栽培場所**")
+        h_cols[1].markdown("**品種**")
+        h_cols[2].markdown("**株数**")
+        h_cols[3].markdown("**AI生育率**")
+        h_cols[4].markdown("**推定重量**")
+        h_cols[5].markdown("**予測収穫日**")
+        h_cols[6].markdown("**適期まで**")
+        if is_admin: h_cols[7].markdown("**操作**")
         st.markdown("---")
 
         for lot in lots_data:
-            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([2.2, 1.2, 1.0, 1.1, 1.0, 1.5, 1.2, 0.8])
-            c1.write(lot["location"])
-            c2.write(lot["variety"])
-            c3.write(lot["quantity"])
-            c4.write(lot["growth_rate"])
-            c5.write(lot["weight"])
-            c6.write(lot["pred_date"])
+            c_cols = st.columns(col_widths)
+            c_cols[0].write(lot["location"])
+            c_cols[1].write(lot["variety"])
+            c_cols[2].write(lot["quantity"])
+            c_cols[3].write(lot["growth_rate"])
+            c_cols[4].write(lot["weight"])
+            c_cols[5].write(lot["pred_date"])
             
             if lot["sort_rem_days"] == 0:
-                c7.markdown(f":green[**{lot['rem_days_str']}**]")
+                c_cols[6].markdown(f":green[**{lot['rem_days_str']}**]")
             else:
-                c7.write(lot["rem_days_str"])
+                c_cols[6].write(lot["rem_days_str"])
                 
-            if c8.button("🗑️", key=f"del_pred_{lot['id']}", help="手動削除"):
-                if delete_record("teichaku", lot["id"]):
-                    st.success("削除しました。")
-                    st.rerun()
+            # 管理者(admin)のみ削除ボタンを表示
+            if is_admin:
+                if c_cols[7].button("🗑️", key=f"del_pred_{lot['id']}", help="手動削除"):
+                    if delete_record("teichaku", lot["id"]):
+                        st.success("削除しました。")
+                        st.rerun()
 
 # ----------------------------------------------------
 # ⑥ 収穫実績・分析
@@ -502,8 +556,7 @@ elif menu == "収穫実績・分析":
         )
         st.markdown("---")
         
-        st.subheader("1. 品目別 収穫総重量の推移 (kg) [未収穫日も0kg表示]")
-        
+        st.subheader("1. 品目別 収穫総重量の推移 (kg)")
         filter_type_h = st.selectbox(
             "グラフ表示期間の選択",
             ["直近30日間", "今月 (2026年7月)", "先月 (2026年6月)", "2026年全期間", "全期間", "日付で直接指定"]
@@ -566,8 +619,6 @@ elif menu == "収穫実績・分析":
         st.markdown("---")
         
         st.subheader("2. 過去1週間（直近7日間）の収穫実績データ一覧表")
-        st.caption("※7日より前の過去データは、最上部の「全過去収穫実績データをCSVダウンロード」ボタンから保存・確認できます。")
-        
         one_week_ago = today - timedelta(days=7)
         df_1week = df_s[df_s["dt"].dt.date >= one_week_ago].copy()
         
@@ -592,37 +643,41 @@ elif menu == "収穫実績・分析":
                 ascending=[False, True, True, True]
             ).reset_index(drop=True)
 
-            h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6, 0.7])
-            h1.markdown("**収穫日**")
-            h2.markdown("**品種**")
-            h3.markdown("**栽培場所**")
-            h4.markdown("**収穫重量**")
-            h5.markdown("**品質**")
-            h6.markdown("**備考**")
-            h7.markdown("**登録日時**")
-            h8.markdown("**操作**")
+            s_col_widths = [1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6]
+            if is_admin: s_col_widths.append(0.7)
+
+            sh_cols = st.columns(s_col_widths)
+            sh_cols[0].markdown("**収穫日**")
+            sh_cols[1].markdown("**品種**")
+            sh_cols[2].markdown("**栽培場所**")
+            sh_cols[3].markdown("**収穫重量**")
+            sh_cols[4].markdown("**品質**")
+            sh_cols[5].markdown("**備考**")
+            sh_cols[6].markdown("**登録日時**")
+            if is_admin: sh_cols[7].markdown("**操作**")
             st.markdown("---")
             
             for idx, row in df_1week_sorted.iterrows():
-                c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([1.3, 1.2, 2.0, 1.2, 0.9, 1.3, 1.6, 0.7])
+                sc_cols = st.columns(s_col_widths)
                 d_str = str(row['収穫日'])
                 date_fmt = f"{d_str[:4]}/{d_str[4:6]}/{d_str[6:]}" if len(d_str)==8 else d_str
                 
-                c1.write(date_fmt)
-                c2.write(row['品種'])
-                c3.write(f"{row['ハウス']} - {row['ベッド']}" if row['ハウス'] else "全体")
-                c4.write(f"{row['重量(g)']} g")
-                c5.write(row['品質'] if row['品質'] else "秀")
-                c6.write(row['備考'] if row['備考'] else "-")
-                c7.write(str(row['登録日時'])[:16] if row['登録日時'] else "-")
+                sc_cols[0].write(date_fmt)
+                sc_cols[1].write(row['品種'])
+                sc_cols[2].write(f"{row['ハウス']} - {row['ベッド']}" if row['ハウス'] else "全体")
+                sc_cols[3].write(f"{row['重量(g)']} g")
+                sc_cols[4].write(row['品質'] if row['品質'] else "秀")
+                sc_cols[5].write(row['備考'] if row['備考'] else "-")
+                sc_cols[6].write(str(row['登録日時'])[:16] if row['登録日時'] else "-")
                 
-                if c8.button("🗑️", key=f"del_shukaku_{row['ID']}", help="この収穫記録を削除"):
-                    if delete_record("shukaku", row['ID']):
-                        st.success("削除しました。")
-                        st.rerun()
+                if is_admin:
+                    if sc_cols[7].button("🗑️", key=f"del_shukaku_{row['ID']}", help="この収穫記録を削除"):
+                        if delete_record("shukaku", row['ID']):
+                            st.success("削除しました。")
+                            st.rerun()
 
 # ----------------------------------------------------
-# ⑦ 総合グラフ分析（手動入力分のみ厳密プロット版）
+# ⑦ 総合グラフ分析
 # ----------------------------------------------------
 elif menu == "総合グラフ分析":
     st.header("【気象・ハウス環境データ 総合分析ダッシュボード】")
@@ -685,7 +740,6 @@ elif menu == "総合グラフ分析":
             fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["temp"], mode='lines+markers', name='外気・平均気温 (℃)', line=dict(color='#4caf50', width=2)))
             fig1.add_trace(go.Scatter(x=df_filtered["dt"], y=df_filtered["min_temp"], mode='lines+markers', name='外気・最低気温 (℃)', line=dict(color='#1e88e5', dash='dash')))
             
-            # 手動入力分のみプロット
             df_ht = df_filtered.dropna(subset=["house_temp"])
             if not df_ht.empty:
                 fig1.add_trace(go.Scatter(x=df_ht["dt"], y=df_ht["house_temp"], mode='lines+markers', name='🏠 ハウス内気温 (℃)', line=dict(color='#ff9800', width=3)))
@@ -700,9 +754,6 @@ elif menu == "総合グラフ分析":
                 xaxis=dict(tickformat="%m/%d")
             )
             st.plotly_chart(fig1, use_container_width=True)
-
-            if df_ht.empty and df_wt.empty:
-                st.caption("※ 🏠ハウス内気温 および 💧ハウス水温 は『今日の環境入力』メニューから手動保存した日のみグラフ上にドット描画されます。")
 
             st.markdown("---")
 
@@ -763,3 +814,52 @@ elif menu == "総合グラフ分析":
                 fig4.update_xaxes(tickformat="%m/%d")
                 fig4.update_layout(hovermode="x unified", template="plotly_dark", height=420)
                 st.plotly_chart(fig4, use_container_width=True)
+
+# ----------------------------------------------------
+# ⑧ 👥 ユーザー・権限管理（管理者専用画面）
+# ----------------------------------------------------
+elif menu == "👥 ユーザー・権限管理" and is_admin:
+    st.header("【👥 ユーザー・権限管理画面 (管理者専用)】")
+    st.write("現場スタッフや管理者のユーザーアカウント（ID・PW・権限）をここで発行・削除できます。")
+    
+    col_u1, col_u2 = st.columns([1, 1])
+    
+    with col_u1:
+        st.subheader("➕ 新規アカウントの発行")
+        with st.form("new_user_form"):
+            new_u = st.text_input("新規ユーザーID (半角英数字)")
+            new_p = st.text_input("新規パスワード", type="password")
+            new_r = st.selectbox("付与する権限", ["user (一般スタッフ)", "admin (管理者)"])
+            
+            role_code = "admin" if "admin" in new_r else "user"
+            submit_u = st.form_submit_button("アカウントを作成する")
+            
+            if submit_u:
+                if not new_u or not new_p:
+                    st.error("⚠️ ユーザーIDとパスワードの両方を入力してください。")
+                else:
+                    if insert_user(new_u, new_p, role_code):
+                        st.success(f"🎉 ユーザー `{new_u}` （権限: {role_code}） を作成しました！")
+                        st.rerun()
+                    else:
+                        st.error("⚠️ このユーザーIDは既に存在します。別のIDを指定してください。")
+                        
+    with col_u2:
+        st.subheader("📋 登録済みユーザー一覧")
+        all_u = select_all_users()
+        if all_u:
+            for u in all_u:
+                u_id, u_name, u_role, u_created = u[0], u[1], u[2], u[3]
+                r_label = "👑 管理者" if u_role == "admin" else "🌱 一般"
+                
+                u_col1, u_col2, u_col3 = st.columns([2, 1, 1])
+                u_col1.write(f"ID: `{u_name}`")
+                u_col2.write(r_label)
+                
+                # 初期管理者 (admin) 自身は誤消去防止のため削除不可
+                if u_name != "admin":
+                    if u_col3.button("🗑️ 削除", key=f"del_u_{u_id}"):
+                        delete_user(u_id)
+                        st.success(f"ユーザー `{u_name}` を削除しました。")
+                        st.rerun()
+                st.markdown("---")
