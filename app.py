@@ -842,8 +842,8 @@ elif menu == "👥 ユーザー・権限管理" and is_admin:
     with col_u1:
         st.subheader("➕ 新規アカウントの発行")
         with st.form("new_user_form"):
-            new_u = st.text_input("新規ユーザーID (半角英数字)")
             new_disp = st.text_input("氏名 (例: 山田 花子)")
+            new_u = st.text_input("新規ユーザーID (半角英数字)")
             new_p = st.text_input("新規パスワード", type="password")
             new_r = st.selectbox("付与する権限", ["user (一般スタッフ)", "admin (管理者)"])
             
