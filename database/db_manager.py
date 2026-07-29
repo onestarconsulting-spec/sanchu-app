@@ -11,7 +11,8 @@ def get_connection():
         database=st.secrets["postgres"]["database"],
         port=st.secrets["postgres"]["port"],
         user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"]
+        password=st.secrets["postgres"]["password"],
+        sslmode="require"
     )
 
 def hash_password(password):

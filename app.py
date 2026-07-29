@@ -110,13 +110,13 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-st.set_page_config(page_title="サンチュ栽培管理・収穫予測システム", layout="wide")
+st.set_page_config(page_title="水耕栽培管理・収穫予測システム", layout="wide")
 
 # ----------------------------------------------------
 # 🔐 ログイン画面
 # ----------------------------------------------------
 if not st.session_state["logged_in"]:
-    st.title("🔑 サンチュ栽培管理システム ログイン")
+    st.title("🔑 水耕栽培管理・収穫予測システム ログイン")
     st.write("システムを利用するには、IDとパスワードを入力してログインしてください。")
     
     with st.form("login_form"):
@@ -186,7 +186,7 @@ if is_admin:
 
 menu = st.sidebar.radio("メニュー切り替え", menu_options)
 
-st.title("🌱 サンチュ栽培管理・収穫予測システム Ver.2 (Web版)")
+st.title("🌱 水耕栽培管理・収穫予測システム")
 
 # ----------------------------------------------------
 # ① ホーム・本日の状況
@@ -428,7 +428,7 @@ elif menu == "AI収穫予測 (栽培管理)":
         st.download_button(
             label="📥 全栽培ロットデータをCSVダウンロード",
             data=df_export.to_csv(index=False).encode('utf-8-sig'),
-            file_name=f"sanchu_active_lots_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"active_lots_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
         st.markdown("---")
@@ -564,7 +564,7 @@ elif menu == "収穫実績・分析":
         st.download_button(
             label="📥 全過去収穫実績データをCSVダウンロード",
             data=df_s[["ID", "収穫日", "品種", "ハウス", "ベッド", "重量(g)", "品質", "備考", "登録日時", "登録者"]].to_csv(index=False).encode('utf-8-sig'),
-            file_name=f"sanchu_all_harvest_{datetime.now().strftime('%Y%m%d')}.csv",
+            file_name=f"all_harvest_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
         st.markdown("---")
@@ -740,7 +740,7 @@ elif menu == "総合グラフ分析":
         st.download_button(
             label="📥 選択期間のCSVデータをダウンロード",
             data=df_filtered.to_csv(index=False).encode('utf-8-sig'),
-            file_name=f"sendai_climate_{start_f}_{end_f}.csv",
+            file_name=f"climate_data_{start_f}_{end_f}.csv",
             mime="text/csv"
         )
         st.markdown("---")
