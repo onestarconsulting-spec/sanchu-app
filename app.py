@@ -171,6 +171,29 @@ def delete_record(table_name, record_id):
         st.error(f"削除エラー: {e}")
         return False
 
+def update_user_info(user_id, username, password, role, display_name):
+    """ユーザー情報を更新（パスワードは入力がある場合のみ変更）"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        if password and password.strip() != "":
+            cursor.execute(
+                "UPDATE users SET username = %s, password = %s, role = %s, display_name = %s WHERE id = %s",
+                (username, password, role, display_name, user_id)
+            )
+        else:
+            cursor.execute(
+                "UPDATE users SET username = %s, role = %s, display_name = %s WHERE id = %s",
+                (username, role, display_name, user_id)
+            )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"ユーザー更新エラー: {e}")
+        return False
+
 # サイドバー表示
 st.sidebar.markdown(f"👤 **ログイン中**: `{user_disp_name}` （{'👑管理者' if is_admin else '🌱一般'}）")
 if st.sidebar.button("🚪 ログアウト"):
@@ -835,7 +858,7 @@ elif menu == "総合グラフ分析":
 # ----------------------------------------------------
 elif menu == "👥 ユーザー・権限管理" and is_admin:
     st.header("【👥 ユーザー・権限管理画面 (管理者専用)】")
-    st.write("現場スタッフや管理者のユーザーアカウント（ID・氏名・PW・権限）を管理できます。")
+    st.write("現場スタッフや管理者のユーザーアカウント（ID・氏名・PW・権限）の登録・変更・削除ができます。")
     
     col_u1, col_u2 = st.columns([1, 1])
     
@@ -861,20 +884,37 @@ elif menu == "👥 ユーザー・権限管理" and is_admin:
                         st.error("⚠️ このユーザーIDは既に存在します。別のIDを指定してください。")
                         
     with col_u2:
-        st.subheader("📋 登録済みユーザー一覧")
+        st.subheader("📋 登録済みユーザー一覧・編集")
         all_u = select_all_users()
         if all_u:
             for u in all_u:
                 u_id, u_name, u_role, u_disp, u_created = u[0], u[1], u[2], u[3], u[4]
                 r_label = "👑 管理者" if u_role == "admin" else "🌱 一般"
                 
-                u_col1, u_col2, u_col3 = st.columns([2, 1, 1])
-                u_col1.write(f"氏名: **{u_disp}** (`{u_name}`)")
-                u_col2.write(r_label)
+                st.write(f"👤 **{u_disp}** (`{u_name}`) - {r_label}")
                 
-                if u_name != "admin":
-                    if u_col3.button("🗑️ 削除", key=f"del_u_{u_id}"):
-                        delete_user(u_id)
-                        st.success(f"ユーザー `{u_disp}` を削除しました。")
-                        st.rerun()
+                with st.expander(f"✏️ アカウント情報を変更・管理する"):
+                    with st.form(key=f"edit_user_form_{u_id}"):
+                        edit_disp = st.text_input("氏名", value=u_disp or "")
+                        edit_u = st.text_input("ユーザーID (半角英数字)", value=u_name)
+                        edit_p = st.text_input("新しいパスワード (変更しない場合は空欄)", type="password")
+                        edit_r_idx = 1 if u_role == "admin" else 0
+                        edit_r = st.selectbox("権限", ["user (一般スタッフ)", "admin (管理者)"], index=edit_r_idx)
+                        
+                        e_role_code = "admin" if "admin" in edit_r else "user"
+                        submit_edit = st.form_submit_button("変更内容を保存する")
+                        
+                        if submit_edit:
+                            if not edit_u:
+                                st.error("⚠️ ユーザーIDを入力してください。")
+                            else:
+                                if update_user_info(u_id, edit_u, edit_p, e_role_code, edit_disp):
+                                    st.success(f"🎉 ユーザー `{edit_disp}` の情報を更新しました！")
+                                    st.rerun()
+                    
+                    if u_name != "admin":
+                        if st.button("🗑️ このアカウントを削除する", key=f"del_u_{u_id}"):
+                            delete_user(u_id)
+                            st.success(f"ユーザー `{u_disp}` を削除しました。")
+                            st.rerun()
                 st.markdown("---")
