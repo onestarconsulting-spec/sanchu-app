@@ -110,7 +110,8 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-st.set_page_config(page_title="水耕栽培管理・収穫予測システム", layout="wide")
+# スマホのホーム画面追加用アイコン (page_icon="🌱") を設定
+st.set_page_config(page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide")
 
 # ----------------------------------------------------
 # 🔐 ログイン画面
