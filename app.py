@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime, timedelta, date
 import requests
@@ -110,8 +111,43 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
     st.session_state["user_info"] = None
 
-# スマホのホーム画面追加用アイコン (page_icon="🌱") を設定
 st.set_page_config(page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide")
+
+# ----------------------------------------------------
+# 📱 スマホ全画面化（アドレスバー消去）メタタグの動的挿入
+# ----------------------------------------------------
+components.html(
+    """
+    <script>
+        const head = window.parent.document.head;
+
+        // iOS (Safari) 用全画面化タグ
+        if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+            const metaApple = window.parent.document.createElement('meta');
+            metaApple.name = 'apple-mobile-web-app-capable';
+            metaApple.content = 'yes';
+            head.appendChild(metaApple);
+        }
+        
+        // iOS ステータスバーのデザイン指定
+        if (!head.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')) {
+            const metaStatus = window.parent.document.createElement('meta');
+            metaStatus.name = 'apple-mobile-web-app-status-bar-style';
+            metaStatus.content = 'default';
+            head.appendChild(metaStatus);
+        }
+
+        // Android (Chrome) 用全画面化タグ
+        if (!head.querySelector('meta[name="mobile-web-app-capable"]')) {
+            const metaAndroid = window.parent.document.createElement('meta');
+            metaAndroid.name = 'mobile-web-app-capable';
+            metaAndroid.content = 'yes';
+            head.appendChild(metaAndroid);
+        }
+    </script>
+    """,
+    height=0,
+)
 
 # ----------------------------------------------------
 # 🔐 ログイン画面
