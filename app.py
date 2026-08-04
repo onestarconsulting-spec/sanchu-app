@@ -1,3 +1,4 @@
+import calendar
 import re
 import threading
 from datetime import date, datetime, timedelta
@@ -24,7 +25,9 @@ from database.db_manager import (
 )
 from plotly.subplots import make_subplots
 
-# データベースの初期化
+# ----------------------------------------------------
+# 1. データベース初期化 ＆ ページ設定
+# ----------------------------------------------------
 init_db()
 
 SENDAI_LAT = 38.2688
@@ -35,33 +38,97 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------
-# 画面中央「回転ローダー（クルクル）」表示スタイル強制的適用
+# 画面中央「回転ローダー（クルクル）」強制表示CSS
 # ----------------------------------------------------
 st.markdown(
     """
     <style>
-    /* 読み込み中表示を画面中央に大きなモーダルスタイルで固定 */
-    [data-testid="stStatusWidget"], .stSpinner {
+    /* Streamlit標準スピナーを画面中央に全画面オーバーレイで表示 */
+    div[data-testid="stSpinner"] {
         position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        transform: translate(-50%, -50%) !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        background-color: rgba(14, 17, 23, 0.85) !important;
         z-index: 999999 !important;
-        background-color: rgba(14, 17, 23, 0.9) !important;
-        padding: 30px 50px !important;
-        border-radius: 16px !important;
-        border: 2px solid #00bcd4 !important;
-        box-shadow: 0 0 30px rgba(0, 188, 212, 0.4) !important;
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
     }
-    [data-testid="stStatusWidget"] *, .stSpinner * {
-        font-size: 18px !important;
-        font-weight: bold !important;
-        color: #ffffff !important;
+    div[data-testid="stSpinner"] > div {
+        border-top-color: #00bcd4 !important;
+        width: 60px !important;
+        height: 60px !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+# ----------------------------------------------------
+# 📅 完全日本語対応「年月日」選択コンポーネント関数
+# ----------------------------------------------------
+def japanese_date_input(label, default_date=None, key_prefix="jp_date"):
+  """英語カレンダーを使わず、完全に日本語で年月日を選択するコンポーネント"""
+  if default_date is None:
+    default_date = datetime.now().date()
+
+  st.write(f"**{label}**")
+  c_y, c_m, c_d = st.columns(3)
+
+  years = list(range(2020, datetime.now().year + 3))
+  months = list(range(1, 13))
+
+  sel_year = c_y.selectbox(
+      "年",
+      years,
+      index=years.index(default_date.year)
+      if default_date.year in years
+      else len(years) - 1,
+      key=f"{key_prefix}_year",
+  )
+  sel_month = c_m.selectbox(
+      "月", months, index=default_date.month - 1, key=f"{key_prefix}_month"
+  )
+
+  max_days = calendar.monthrange(sel_year, sel_month)[1]
+  days = list(range(1, max_days + 1))
+  default_day_idx = (
+      default_date.day - 1 if default_date.day <= max_days else max_days - 1
+  )
+
+  sel_day = c_d.selectbox(
+      "日", days, index=default_day_idx, key=f"{key_prefix}_day"
+  )
+
+  return date(sel_year, sel_month, sel_day)
+
+
+# ----------------------------------------------------
+# 🔐 画面再読み込み（リロード）時の自動ログイン復元処理
+# ----------------------------------------------------
+query_params = st.query_params
+
+if "logged_in" not in st.session_state:
+  st.session_state["logged_in"] = False
+if "user_info" not in st.session_state:
+  st.session_state["user_info"] = None
+
+# URLパラメータが存在する場合はセッションを全自動復元（更新してもログアウトしない）
+if not st.session_state["logged_in"] and "u" in query_params:
+  u_name = query_params["u"]
+  all_users = select_all_users()
+  matched_user = next((u for u in all_users if u[1] == u_name), None)
+  if matched_user:
+    st.session_state["logged_in"] = True
+    st.session_state["user_info"] = {
+        "id": matched_user[0],
+        "username": matched_user[1],
+        "role": matched_user[2],
+        "display_name": matched_user[3],
+    }
 
 
 # ----------------------------------------------------
@@ -213,60 +280,6 @@ def bg_smart_climate_sync():
 threading.Thread(target=bg_smart_climate_sync, daemon=True).start()
 
 # ----------------------------------------------------
-# 🔐 ログイン状態の自動復元処理
-# ----------------------------------------------------
-query_params = st.query_params
-
-if "logged_in" not in st.session_state:
-  st.session_state["logged_in"] = False
-if "user_info" not in st.session_state:
-  st.session_state["user_info"] = None
-
-# URLパラメータからの自動復元
-if not st.session_state["logged_in"] and "u" in query_params:
-  u_name = query_params["u"]
-  all_users = select_all_users()
-  matched_user = next((u for u in all_users if u[1] == u_name), None)
-  if matched_user:
-    st.session_state["logged_in"] = True
-    st.session_state["user_info"] = {
-        "id": matched_user[0],
-        "username": matched_user[1],
-        "role": matched_user[2],
-        "display_name": matched_user[3],
-    }
-
-# ----------------------------------------------------
-# 📱 スマホ全画面化 ＆ 親要素とのログイン連携
-# ----------------------------------------------------
-login_u = (
-    st.session_state["user_info"]["username"]
-    if st.session_state["user_info"]
-    else ""
-)
-components.html(
-    f"""
-    <script>
-        const head = window.parent.document.head;
-
-        if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {{
-            const metaApple = window.parent.document.createElement('meta');
-            metaApple.name = 'apple-mobile-web-app-capable';
-            metaApple.content = 'yes';
-            head.appendChild(metaApple);
-        }}
-
-        // ログイン状態を親要素(index.html)へ保存通知
-        const loggedUser = "{login_u}";
-        if (loggedUser) {{
-            window.parent.postMessage({{ type: 'SET_USER', username: loggedUser }}, '*');
-        }}
-    </script>
-    """,
-    height=0,
-)
-
-# ----------------------------------------------------
 # 🔐 ログイン画面
 # ----------------------------------------------------
 if not st.session_state["logged_in"]:
@@ -279,14 +292,15 @@ if not st.session_state["logged_in"]:
     submit_login = st.form_submit_button("ログイン")
 
     if submit_login:
-      user = authenticate_user(username_input, password_input)
-      if user:
-        st.session_state["logged_in"] = True
-        st.session_state["user_info"] = user
-        st.query_params["u"] = user["username"]
-        st.rerun()
-      else:
-        st.error("⚠️ ユーザーIDまたはパスワードが正しくありません。")
+      with st.spinner("ログイン処理中..."):
+        user = authenticate_user(username_input, password_input)
+        if user:
+          st.session_state["logged_in"] = True
+          st.session_state["user_info"] = user
+          st.query_params["u"] = user["username"]
+          st.rerun()
+        else:
+          st.error("⚠️ ユーザーIDまたはパスワードが正しくありません。")
 
   st.stop()
 
@@ -374,11 +388,6 @@ if st.sidebar.button("🚪 ログアウト"):
   st.session_state["logged_in"] = False
   st.session_state["user_info"] = None
   st.query_params.clear()
-  components.html(
-      "<script>window.parent.postMessage({ type: 'CLEAR_USER' },"
-      " '*');</script>",
-      height=0,
-  )
   st.rerun()
 
 st.sidebar.markdown("---")
@@ -563,9 +572,10 @@ elif menu == "定植登録":
         [f"{i}番ベッド" for i in range(1, 21)],
         default=["1番ベッド"],
     )
-    plant_date_val = st.date_input(
-        "定植日", datetime.now(), format="YYYY/MM/DD"
-    )
+
+    # 完全日本語入力
+    plant_date_val = japanese_date_input("定植日", key_prefix="teichaku_date")
+
     quantity = st.number_input(
         "株数 (1ベッドあたり)", min_value=1, value=150
     )
@@ -576,32 +586,33 @@ elif menu == "定植登録":
 
     submitted = st.form_submit_button("この内容で一括登録する")
     if submitted:
-      if not lines:
-        st.error("⚠️ ラインを1つ以上選択してください。")
-      elif not beds:
-        st.error("⚠️ ベッドを1つ以上選択してください。")
-      else:
-        str_plant_date = plant_date_val.strftime("%Y%m%d")
-        str_target_size = f"{target_size_val}g"
-        count = 0
-        for l in lines:
-          full_house = f"{house} ({l}ライン)"
-          for b in beds:
-            insert_teichaku(
-                variety,
-                full_house,
-                b,
-                str_plant_date,
-                int(quantity),
-                str_target_size,
-                memo,
-                created_by=user_disp_name,
-            )
-            count += 1
-        st.success(
-            f"🎉 担当者: `{user_disp_name}` として {house} の {len(lines)}ライン ×"
-            f" {len(beds)}ベッド（計 {count} 件）を一括登録しました！"
-        )
+      with st.spinner("一括登録処理中..."):
+        if not lines:
+          st.error("⚠️ ラインを1つ以上選択してください。")
+        elif not beds:
+          st.error("⚠️ ベッドを1つ以上選択してください。")
+        else:
+          str_plant_date = plant_date_val.strftime("%Y%m%d")
+          str_target_size = f"{target_size_val}g"
+          count = 0
+          for l in lines:
+            full_house = f"{house} ({l}ライン)"
+            for b in beds:
+              insert_teichaku(
+                  variety,
+                  full_house,
+                  b,
+                  str_plant_date,
+                  int(quantity),
+                  str_target_size,
+                  memo,
+                  created_by=user_disp_name,
+              )
+              count += 1
+          st.success(
+              f"🎉 担当者: `{user_disp_name}` として {house} の {len(lines)}ライン ×"
+              f" {len(beds)}ベッド（計 {count} 件）を一括登録しました！"
+          )
 
 # ----------------------------------------------------
 # ③ 今日の環境入力
@@ -635,7 +646,9 @@ elif menu == "今日の環境入力":
         break
 
   with st.form("kankyo_form"):
-    date_val = st.date_input("測定日付", datetime.now(), format="YYYY/MM/DD")
+    # 完全日本語入力
+    date_val = japanese_date_input("測定日付", key_prefix="kankyo_date")
+
     house_temp = st.number_input(
         "ハウス内気温 (℃) [手動測定]", value=def_htemp, step=0.1
     )
@@ -650,21 +663,22 @@ elif menu == "今日の環境入力":
         "この日のハウス内環境データを保存する"
     )
     if submitted:
-      str_date = date_val.strftime("%Y%m%d")
-      update_house_manual_kankyo(
-          str_date,
-          house_temp,
-          water_temp,
-          ec,
-          ph,
-          memo,
-          created_by=user_disp_name,
-      )
-      st.success(
-          f"担当者: `{user_disp_name}`"
-          " として指定日のデータ（内気温・水温・EC・pH）を更新・保存しました！"
-      )
-      st.rerun()
+      with st.spinner("環境データ保存中..."):
+        str_date = date_val.strftime("%Y%m%d")
+        update_house_manual_kankyo(
+            str_date,
+            house_temp,
+            water_temp,
+            ec,
+            ph,
+            memo,
+            created_by=user_disp_name,
+        )
+        st.success(
+            f"担当者: `{user_disp_name}`"
+            " として指定日のデータ（内気温・水温・EC・pH）を更新・保存しました！"
+        )
+        st.rerun()
 
 # ----------------------------------------------------
 # ④ 収穫登録
@@ -676,9 +690,11 @@ elif menu == "収穫登録":
   )
 
   with st.form("shukaku_form"):
-    shukaku_date_val = st.date_input(
-        "収穫日", datetime.now(), format="YYYY/MM/DD"
+    # 完全日本語入力
+    shukaku_date_val = japanese_date_input(
+        "収穫日", key_prefix="shukaku_date"
     )
+
     house = st.selectbox("ハウス", ["Ⅰ棟", "Ⅱ棟", "Ⅲ棟", "Ⅳ棟"])
     lines = st.multiselect(
         "ライン (複数選択可)",
@@ -722,31 +738,32 @@ elif menu == "収穫登録":
 
     submitted = st.form_submit_button("この内容で収穫登録する")
     if submitted:
-      if not lines:
-        st.error("⚠️ ラインを1つ以上選択してください。")
-      elif not beds:
-        st.error("⚠️ ベッドを1つ以上選択してください。")
-      else:
-        str_shukaku_date = shukaku_date_val.strftime("%Y%m%d")
-        count = 0
-        for l in lines:
-          full_house = f"{house} ({l}ライン)"
-          for b in beds:
-            insert_shukaku_and_clear_teichaku(
-                str_shukaku_date,
-                full_house,
-                b,
-                weight,
-                quality,
-                memo,
-                created_by=user_disp_name,
-            )
-            count += 1
+      with st.spinner("収穫登録処理中..."):
+        if not lines:
+          st.error("⚠️ ラインを1つ以上選択してください。")
+        elif not beds:
+          st.error("⚠️ ベッドを1つ以上選択してください。")
+        else:
+          str_shukaku_date = shukaku_date_val.strftime("%Y%m%d")
+          count = 0
+          for l in lines:
+            full_house = f"{house} ({l}ライン)"
+            for b in beds:
+              insert_shukaku_and_clear_teichaku(
+                  str_shukaku_date,
+                  full_house,
+                  b,
+                  weight,
+                  quality,
+                  memo,
+                  created_by=user_disp_name,
+              )
+              count += 1
 
-        st.success(
-            f"🎉 担当者: `{user_disp_name}` として {house} の {len(lines)}ライン ×"
-            f" {len(beds)}ベッド（計 {count} 件）を収穫登録しました！"
-        )
+          st.success(
+              f"🎉 担当者: `{user_disp_name}` として {house} の {len(lines)}ライン ×"
+              f" {len(beds)}ベッド（計 {count} 件）を収穫登録しました！"
+          )
 
 # ----------------------------------------------------
 # ⑤ AI収穫予測 (栽培管理)
@@ -1047,15 +1064,10 @@ elif menu == "収穫実績・分析":
       )
       start_h, end_h = min_d, today
     else:
-      c1, c2 = st.columns(2)
-      with c1:
-        start_h = st.date_input(
-            "開始日",
-            value=today - timedelta(days=30),
-            format="YYYY/MM/DD",
-        )
-      with c2:
-        end_h = st.date_input("終了日", value=today, format="YYYY/MM/DD")
+      start_h = japanese_date_input(
+          "開始日", value=today - timedelta(days=30), key_prefix="shukaku_start"
+      )
+      end_h = japanese_date_input("終了日", value=today, key_prefix="shukaku_end")
 
     all_days = [
         start_h + timedelta(days=i) for i in range((end_h - start_h).days + 1)
@@ -1281,13 +1293,10 @@ elif menu == "総合グラフ分析":
     elif filter_type == "全期間":
       start_f, end_f = df["dt"].min().date(), df["dt"].max().date()
     else:
-      c1, c2 = st.columns(2)
-      with c1:
-        start_f = st.date_input(
-            "開始日", value=df["dt"].min().date(), format="YYYY/MM/DD"
-        )
-      with c2:
-        end_f = st.date_input("終了日", value=today, format="YYYY/MM/DD")
+      start_f = japanese_date_input(
+          "開始日", value=df["dt"].min().date(), key_prefix="graph_start"
+      )
+      end_f = japanese_date_input("終了日", value=today, key_prefix="graph_end")
 
     df_filtered = df[
         (df["dt"].dt.date >= start_f) & (df["dt"].dt.date <= end_f)
