@@ -34,7 +34,27 @@
     </style>
 </head>
 <body>
-    <!-- 修正済みの正しい Streamlit URL -->
-    <iframe src="https://sanchu-app-diq3gyfsasmmgvax3axxwp.streamlit.app/?embed=true"></iframe>
+    <iframe id="appFrame" src="https://sanchu-app-diq3gyfsasmmgvax3axxwp.streamlit.app/?embed=true"></iframe>
+
+    <script>
+        // スリープ画面が出ている場合に自動で「Yes, get this app back up!」ボタンを押す処理
+        const iframe = document.getElementById('appFrame');
+        
+        function autoWakeUp() {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                const wakeButton = iframeDoc.querySelector('button');
+                if (wakeButton && wakeButton.innerText.includes('get this app back up')) {
+                    wakeButton.click();
+                }
+            } catch (e) {
+                // セキュリティ保護により直接操作できない場合のフォールバック
+            }
+        }
+
+        iframe.onload = function() {
+            setTimeout(autoWakeUp, 1000);
+        };
+    </script>
 </body>
 </html>
