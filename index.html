@@ -4,56 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>水耕栽培管理システム</title>
-
-    <!-- 🌿 PCブラウザ・タブ用アイコン（ファビコン） -->
     <link rel="icon" href="https://em-content.zobj.net/source/apple/391/seedling_1f331.png" type="image/png">
-
-    <!-- 📱 スマホホーム画面用（アドレスバー非表示）設定 -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="水耕栽培">
     <meta name="mobile-web-app-capable" content="yes">
-
-    <!-- 📱 iPhoneホーム画面用「🌱」アイコン -->
     <link rel="apple-touch-icon" href="https://em-content.zobj.net/source/apple/391/seedling_1f331.png">
-
     <style>
-        /* 画面の枠や余白を消して全画面表示にする設定 */
-        body, html { 
-            margin: 0; 
-            padding: 0; 
-            height: 100%; 
-            overflow: hidden; 
-            background-color: #0e1117; 
-        }
-        iframe { 
-            width: 100%; 
-            height: 100%; 
-            border: none; 
-        }
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background-color: #0e1117; }
+        iframe { width: 100%; height: 100%; border: none; }
     </style>
 </head>
 <body>
     <iframe id="appFrame" src="https://sanchu-app-diq3gyfsasmmgvax3axxwp.streamlit.app/?embed=true"></iframe>
 
     <script>
-        // スリープ画面が出ている場合に自動で「Yes, get this app back up!」ボタンを押す処理
+        // URLやストレージを通じてセッション維持と自動スリープ解除を管理
         const iframe = document.getElementById('appFrame');
         
-        function autoWakeUp() {
-            try {
-                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                const wakeButton = iframeDoc.querySelector('button');
-                if (wakeButton && wakeButton.innerText.includes('get this app back up')) {
-                    wakeButton.click();
-                }
-            } catch (e) {
-                // セキュリティ保護により直接操作できない場合のフォールバック
+        window.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'SET_USER') {
+                localStorage.setItem('sanchu_user', e.data.username);
+            } else if (e.data && e.data.type === 'CLEAR_USER') {
+                localStorage.removeItem('sanchu_user');
             }
-        }
+        });
 
         iframe.onload = function() {
-            setTimeout(autoWakeUp, 1000);
+            const savedUser = localStorage.getItem('sanchu_user');
+            if (savedUser && !iframe.src.includes('u=')) {
+                iframe.src = "https://sanchu-app-diq3gyfsasmmgvax3axxwp.streamlit.app/?embed=true&u=" + encodeURIComponent(savedUser);
+            }
         };
     </script>
 </body>
