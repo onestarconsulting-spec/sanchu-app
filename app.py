@@ -181,17 +181,33 @@ def bg_smart_climate_sync():
 threading.Thread(target=bg_smart_climate_sync, daemon=True).start()
 
 # ----------------------------------------------------
-# 🔐 ログイン状態のセッション自動保持・保護処理
+# 🔐 ログイン状態の永続保持・管理処理
 # ----------------------------------------------------
 st.set_page_config(
     page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
 )
 
-# セッション状態の安全な初期化（コード変更時も破棄されない構造）
+# URLパラメータを利用したセッション永続化チェック
+query_params = st.query_params
+
 if "logged_in" not in st.session_state:
   st.session_state["logged_in"] = False
 if "user_info" not in st.session_state:
   st.session_state["user_info"] = None
+
+# ブラウザ更新時にURLキーから自動再ログイン復元を行う
+if not st.session_state["logged_in"] and "user" in query_params:
+  u_name = query_params["user"]
+  all_users = select_all_users()
+  matched_user = next((u for u in all_users if u[1] == u_name), None)
+  if matched_user:
+    st.session_state["logged_in"] = True
+    st.session_state["user_info"] = {
+        "id": matched_user[0],
+        "username": matched_user[1],
+        "role": matched_user[2],
+        "display_name": matched_user[3],
+    }
 
 # ----------------------------------------------------
 # 📱 スマホ全画面化 ＆ 日本語カレンダーロケール補正
@@ -248,6 +264,8 @@ if not st.session_state["logged_in"]:
       if user:
         st.session_state["logged_in"] = True
         st.session_state["user_info"] = user
+        # ログイン情報をURLパラメータに付与（更新時の自動復元用）
+        st.query_params["user"] = user["username"]
         st.rerun()
       else:
         st.error("⚠️ ユーザーIDまたはパスワードが正しくありません。")
@@ -337,6 +355,7 @@ st.sidebar.markdown(
 if st.sidebar.button("🚪 ログアウト"):
   st.session_state["logged_in"] = False
   st.session_state["user_info"] = None
+  st.query_params.clear()
   st.rerun()
 
 st.sidebar.markdown("---")
@@ -1262,9 +1281,7 @@ elif menu == "総合グラフ分析":
     if df_filtered.empty:
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
-      # ----------------------------------------------------
-      # 💡 180日以上の長期間の場合は全環境項目（降水量含む）を「週平均」に自動統一変換
-      # ----------------------------------------------------
+
       period_days = (end_f - start_f).days
 
       if period_days >= 180:
@@ -1275,13 +1292,12 @@ elif menu == "総合グラフ分析":
         df_chart = (
             df_filtered.set_index("dt")
             .resample("W")
-            .mean(numeric_only=True)  # 降水量も含めて全項目を週平均(日平均)で算出
+            .mean(numeric_only=True)
             .reset_index()
         )
       else:
         df_chart = df_filtered.copy()
 
-      # 軸目盛りの最適化設定
       if period_days <= 60:
         dtick_val = "D1"
         date_format = "%m/%d"
