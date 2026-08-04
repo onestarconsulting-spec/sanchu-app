@@ -193,7 +193,7 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------
-# 📱 スマホ全画面化（アドレスバー消去）メタタグの動的挿入
+# 📱 スマホ全画面化 ＆ 日本語カレンダー強制ロケール補正
 # ----------------------------------------------------
 components.html(
     """
@@ -220,6 +220,12 @@ components.html(
             metaAndroid.content = 'yes';
             head.appendChild(metaAndroid);
         }
+
+        // ブラウザの言語設定を日本語(ja-JP)に上書き固定するスクリプト
+        try {
+            Object.defineProperty(navigator, 'language', {get: function() { return 'ja-JP'; }});
+            Object.defineProperty(navigator, 'languages', {get: function() { return ['ja-JP', 'ja']; }});
+        } catch(e) {}
     </script>
     """,
     height=0,
@@ -1257,33 +1263,19 @@ elif menu == "総合グラフ分析":
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
       # ----------------------------------------------------
-      # 💡 180日以上の長期間の場合は「週平均（週集計）」に自動変換してグラフの乱高下を抑制
+      # 💡 180日以上の長期間の場合は全環境項目を「週平均」に自動統一変換（降水量も含む）
       # ----------------------------------------------------
       period_days = (end_f - start_f).days
 
       if period_days >= 180:
         st.info(
-            "💡 180日以上の長期間表示のため、グラフの視認性を高める「週平均（週集計）」データで表示しています。"
+            "💡"
+            " 180日以上の長期間表示のため、全項目を「週平均（日あたり平均）」データに変換して表示しています。"
         )
         df_chart = (
             df_filtered.set_index("dt")
             .resample("W")
-            .agg({
-                "max_temp": "mean",
-                "temp": "mean",
-                "min_temp": "mean",
-                "house_temp": "mean",
-                "water_temp": "mean",
-                "humidity_mean": "mean",
-                "humidity_min": "mean",
-                "precip_total": "sum",  # 降水量は週合計
-                "sunshine_hours": "mean",
-                "wind_speed_max": "mean",
-                "wind_speed_instant": "mean",
-                "press_land": "mean",
-                "ec": "mean",
-                "ph": "mean",
-            })
+            .mean(numeric_only=True)  # 降水量(precip_total)も含めて全項目を週平均(日平均)で算出
             .reset_index()
         )
       else:
@@ -1408,11 +1400,15 @@ elif menu == "総合グラフ分析":
           col=1,
       )
 
+      # 降水量も他と同様に「週平均」の高さで棒グラフ表示（180日以上の場合）
+      precip_label = (
+          "日平均降水量 (mm/日)" if period_days >= 180 else "日降水量 (mm)"
+      )
       fig2.add_trace(
           go.Bar(
               x=df_chart["dt"],
               y=df_chart["precip_total"],
-              name="降水量 (mm)",
+              name=precip_label,
               marker_color="#2196f3",
               opacity=0.6,
           ),
