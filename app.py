@@ -1185,7 +1185,6 @@ elif menu == "総合グラフ分析":
 
     st.subheader("📅 表示期間の選択")
 
-    # 動的な日付・年月表記計算
     today_dt_obj = datetime.now().date()
     this_month_lbl = (
         f"今月 ({today_dt_obj.year}年{today_dt_obj.month}月)"
@@ -1241,6 +1240,27 @@ elif menu == "総合グラフ分析":
     if df_filtered.empty:
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
+      # ----------------------------------------------------
+      # 💡 表示期間の長さに応じて「軸の目盛り間隔」と「点（マーカー）の表示/非表示」を動的設定
+      # ----------------------------------------------------
+      period_days = (end_f - start_f).days
+
+      # 軸の設定
+      if period_days <= 60:
+        dtick_val = "D1"  # 1日単位
+        date_format = "%m/%d"
+      elif period_days <= 180:
+        dtick_val = (
+            7 * 86400000
+        )  # 約1週間単位 (ミリ秒指定: Plotlyの仕様による)
+        date_format = "%m/%d"
+      else:
+        dtick_val = "M1"  # 1ヶ月単位
+        date_format = "%Y/%m"
+
+      # データ点（マーカー）の表示設定（60日以上の長期間の場合は点無しにして線のみにする）
+      trace_mode = "lines+markers" if period_days < 60 else "lines"
+
       # --- グラフ1: 外気気温 ＆ ハウス内気温・水温 ---
       st.subheader("1. 気温 (外気最高/平均/最低) と ハウス内気温・水温の推移")
       fig1 = go.Figure()
@@ -1248,7 +1268,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["max_temp"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="外気・最高気温 (℃)",
               line=dict(color="#e53935", dash="dash"),
           )
@@ -1257,7 +1277,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["temp"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="外気・平均気温 (℃)",
               line=dict(color="#4caf50", width=2),
           )
@@ -1266,7 +1286,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["min_temp"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="外気・最低気温 (℃)",
               line=dict(color="#1e88e5", dash="dash"),
           )
@@ -1278,7 +1298,7 @@ elif menu == "総合グラフ分析":
             go.Scatter(
                 x=df_ht["dt"],
                 y=df_ht["house_temp"],
-                mode="lines+markers",
+                mode=trace_mode,
                 name="🏠 ハウス内気温 (℃)",
                 line=dict(color="#ff9800", width=3),
             )
@@ -1290,7 +1310,7 @@ elif menu == "総合グラフ分析":
             go.Scatter(
                 x=df_wt["dt"],
                 y=df_wt["water_temp"],
-                mode="lines+markers",
+                mode=trace_mode,
                 name="💧 ハウス水温 (℃)",
                 line=dict(color="#00bcd4", width=2),
             )
@@ -1302,7 +1322,12 @@ elif menu == "総合グラフ分析":
           hovermode="x unified",
           template="plotly_dark",
           height=450,
-          xaxis=dict(tickformat="%m/%d", dtick="D1", range=[start_f, end_f]),
+          xaxis=dict(
+              type="date",
+              tickformat=date_format,
+              dtick=dtick_val,
+              range=[start_f, end_f],
+          ),
       )
       st.plotly_chart(fig1, use_container_width=True)
 
@@ -1323,7 +1348,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["humidity_mean"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="平均湿度 (%)",
               line=dict(color="#009688"),
           ),
@@ -1334,7 +1359,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["humidity_min"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="最小湿度 (%)",
               line=dict(color="#80cbc4", dash="dot"),
           ),
@@ -1358,7 +1383,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["sunshine_hours"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="日照時間 (時間)",
               line=dict(color="#ff9800", width=2),
           ),
@@ -1375,7 +1400,12 @@ elif menu == "総合グラフ分析":
           title_text="日照時間 (時間)", row=2, col=1, secondary_y=True
       )
       fig2.update_xaxes(
-          tickformat="%m/%d", dtick="D1", range=[start_f, end_f], row=2, col=1
+          type="date",
+          tickformat=date_format,
+          dtick=dtick_val,
+          range=[start_f, end_f],
+          row=2,
+          col=1,
       )
       fig2.update_layout(
           hovermode="x unified", template="plotly_dark", height=650
@@ -1392,7 +1422,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["wind_speed_max"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="最大風速 (m/s)",
               line=dict(color="#ff5722"),
           ),
@@ -1402,7 +1432,7 @@ elif menu == "総合グラフ分析":
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["wind_speed_instant"],
-              mode="lines+markers",
+              mode=trace_mode,
               name="最大瞬間風速 (m/s)",
               line=dict(color="#ffab91", dash="dash"),
           ),
@@ -1421,7 +1451,12 @@ elif menu == "総合グラフ分析":
 
       fig3.update_yaxes(title_text="風速 (m/s)", secondary_y=False)
       fig3.update_yaxes(title_text="気圧 (hPa)", secondary_y=True)
-      fig3.update_xaxes(tickformat="%m/%d", dtick="D1", range=[start_f, end_f])
+      fig3.update_xaxes(
+          type="date",
+          tickformat=date_format,
+          dtick=dtick_val,
+          range=[start_f, end_f],
+      )
       fig3.update_layout(
           hovermode="x unified", template="plotly_dark", height=420
       )
@@ -1429,20 +1464,20 @@ elif menu == "総合グラフ分析":
 
       st.markdown("---")
 
-      # --- グラフ4: 培養液 (EC / pH) の推移 ---
+      # --- グラフ4: 培養液 (EC / pH) の推移 [手動測定データのみ] ---
       st.subheader("4. ハウス培養液 (EC / pH) の推移 [手動測定データのみ]")
 
       df_ec_ph = df_filtered.dropna(subset=["ec", "ph"], how="all")
 
-      # データが空でもグラフ枠を表示する処理
       fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 
+      # データが存在する場合はプロット
       if not df_ec_ph.empty:
         fig4.add_trace(
             go.Scatter(
                 x=df_ec_ph["dt"],
                 y=df_ec_ph["ec"],
-                mode="lines+markers",
+                mode=trace_mode,
                 name="EC (dS/m)",
                 line=dict(color="#e91e63", width=2.5),
             ),
@@ -1452,7 +1487,7 @@ elif menu == "総合グラフ分析":
             go.Scatter(
                 x=df_ec_ph["dt"],
                 y=df_ec_ph["ph"],
-                mode="lines+markers",
+                mode=trace_mode,
                 name="pH",
                 line=dict(color="#00bcd4", width=2.5, dash="dash"),
             ),
@@ -1462,9 +1497,12 @@ elif menu == "総合グラフ分析":
       fig4.update_yaxes(title_text="EC (dS/m)", secondary_y=False)
       fig4.update_yaxes(title_text="pH", secondary_y=True)
 
-      # dtick="D1" で1日ごとの目盛りに固定し、range=[start_f, end_f] でデータ無し時も他グラフと同じ軸幅で表示
+      # 軸を明示的に 'date' 型指定することで数値化バグを完全に回避
       fig4.update_xaxes(
-          tickformat="%m/%d", dtick="D1", range=[start_f, end_f]
+          type="date",
+          tickformat=date_format,
+          dtick=dtick_val,
+          range=[start_f, end_f],
       )
 
       fig4.update_layout(
