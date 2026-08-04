@@ -200,7 +200,6 @@ components.html(
     <script>
         const head = window.parent.document.head;
 
-        // iOS (Safari) 用全画面化タグ
         if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
             const metaApple = window.parent.document.createElement('meta');
             metaApple.name = 'apple-mobile-web-app-capable';
@@ -208,7 +207,6 @@ components.html(
             head.appendChild(metaApple);
         }
         
-        // iOS ステータスバーのデザイン指定
         if (!head.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')) {
             const metaStatus = window.parent.document.createElement('meta');
             metaStatus.name = 'apple-mobile-web-app-status-bar-style';
@@ -216,7 +214,6 @@ components.html(
             head.appendChild(metaStatus);
         }
 
-        // Android (Chrome) 用全画面化タグ
         if (!head.querySelector('meta[name="mobile-web-app-capable"]')) {
             const metaAndroid = window.parent.document.createElement('meta');
             metaAndroid.name = 'mobile-web-app-capable';
@@ -303,7 +300,6 @@ def delete_record(table_name, record_id):
 
 
 def update_user_info(user_id, username, password, role, display_name):
-  """ユーザー情報を更新（パスワードは入力がある場合のみ変更）"""
   try:
     conn = get_connection()
     cursor = conn.cursor()
@@ -328,7 +324,6 @@ def update_user_info(user_id, username, password, role, display_name):
     return False
 
 
-# サイドバー表示
 st.sidebar.markdown(
     f"👤 **ログイン中**: `{user_disp_name}`"
     f" （{'👑管理者' if is_admin else '🌱一般'}）"
@@ -520,7 +515,9 @@ elif menu == "定植登録":
         [f"{i}番ベッド" for i in range(1, 21)],
         default=["1番ベッド"],
     )
-    plant_date_val = st.date_input("定植日", datetime.now())
+    plant_date_val = st.date_input(
+        "定植日", datetime.now(), format="YYYY/MM/DD"
+    )
     quantity = st.number_input(
         "株数 (1ベッドあたり)", min_value=1, value=150
     )
@@ -590,7 +587,7 @@ elif menu == "今日の環境入力":
         break
 
   with st.form("kankyo_form"):
-    date_val = st.date_input("測定日付", datetime.now())
+    date_val = st.date_input("測定日付", datetime.now(), format="YYYY/MM/DD")
     house_temp = st.number_input(
         "ハウス内気温 (℃) [手動測定]", value=def_htemp, step=0.1
     )
@@ -631,7 +628,9 @@ elif menu == "収穫登録":
   )
 
   with st.form("shukaku_form"):
-    shukaku_date_val = st.date_input("収穫日", datetime.now())
+    shukaku_date_val = st.date_input(
+        "収穫日", datetime.now(), format="YYYY/MM/DD"
+    )
     house = st.selectbox("ハウス", ["Ⅰ棟", "Ⅱ棟", "Ⅲ棟", "Ⅳ棟"])
     lines = st.multiselect(
         "ライン (複数選択可)",
@@ -1002,9 +1001,13 @@ elif menu == "収穫実績・分析":
     else:
       c1, c2 = st.columns(2)
       with c1:
-        start_h = st.date_input("開始日", value=today - timedelta(days=30))
+        start_h = st.date_input(
+            "開始日",
+            value=today - timedelta(days=30),
+            format="YYYY/MM/DD",
+        )
       with c2:
-        end_h = st.date_input("終了日", value=today)
+        end_h = st.date_input("終了日", value=today, format="YYYY/MM/DD")
 
     all_days = [
         start_h + timedelta(days=i) for i in range((end_h - start_h).days + 1)
@@ -1232,9 +1235,11 @@ elif menu == "総合グラフ分析":
     else:
       c1, c2 = st.columns(2)
       with c1:
-        start_f = st.date_input("開始日", value=df["dt"].min().date())
+        start_f = st.date_input(
+            "開始日", value=df["dt"].min().date(), format="YYYY/MM/DD"
+        )
       with c2:
-        end_f = st.date_input("終了日", value=today)
+        end_f = st.date_input("終了日", value=today, format="YYYY/MM/DD")
 
     df_filtered = df[
         (df["dt"].dt.date >= start_f) & (df["dt"].dt.date <= end_f)
@@ -1252,10 +1257,39 @@ elif menu == "総合グラフ分析":
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
       # ----------------------------------------------------
-      # 💡 表示期間の長さに応じた「軸の目盛り間隔」設定
+      # 💡 180日以上の長期間の場合は「週平均（週集計）」に自動変換してグラフの乱高下を抑制
       # ----------------------------------------------------
       period_days = (end_f - start_f).days
 
+      if period_days >= 180:
+        st.info(
+            "💡 180日以上の長期間表示のため、グラフの視認性を高める「週平均（週集計）」データで表示しています。"
+        )
+        df_chart = (
+            df_filtered.set_index("dt")
+            .resample("W")
+            .agg({
+                "max_temp": "mean",
+                "temp": "mean",
+                "min_temp": "mean",
+                "house_temp": "mean",
+                "water_temp": "mean",
+                "humidity_mean": "mean",
+                "humidity_min": "mean",
+                "precip_total": "sum",  # 降水量は週合計
+                "sunshine_hours": "mean",
+                "wind_speed_max": "mean",
+                "wind_speed_instant": "mean",
+                "press_land": "mean",
+                "ec": "mean",
+                "ph": "mean",
+            })
+            .reset_index()
+        )
+      else:
+        df_chart = df_filtered.copy()
+
+      # 軸目盛りの最適化設定
       if period_days <= 60:
         dtick_val = "D1"
         date_format = "%m/%d"
@@ -1273,8 +1307,8 @@ elif menu == "総合グラフ分析":
       fig1 = go.Figure()
       fig1.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["max_temp"],
+              x=df_chart["dt"],
+              y=df_chart["max_temp"],
               mode=trace_mode,
               name="外気・最高気温 (℃)",
               line=dict(color="#e53935", width=1.5),
@@ -1282,8 +1316,8 @@ elif menu == "総合グラフ分析":
       )
       fig1.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["temp"],
+              x=df_chart["dt"],
+              y=df_chart["temp"],
               mode=trace_mode,
               name="外気・平均気温 (℃)",
               line=dict(color="#4caf50", width=2),
@@ -1291,15 +1325,15 @@ elif menu == "総合グラフ分析":
       )
       fig1.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["min_temp"],
+              x=df_chart["dt"],
+              y=df_chart["min_temp"],
               mode=trace_mode,
               name="外気・最低気温 (℃)",
               line=dict(color="#1e88e5", width=1.5),
           )
       )
 
-      df_ht = df_filtered.dropna(subset=["house_temp"])
+      df_ht = df_chart.dropna(subset=["house_temp"])
       if not df_ht.empty:
         fig1.add_trace(
             go.Scatter(
@@ -1311,7 +1345,7 @@ elif menu == "総合グラフ分析":
             )
         )
 
-      df_wt = df_filtered.dropna(subset=["water_temp"])
+      df_wt = df_chart.dropna(subset=["water_temp"])
       if not df_wt.empty:
         fig1.add_trace(
             go.Scatter(
@@ -1353,8 +1387,8 @@ elif menu == "総合グラフ分析":
 
       fig2.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["humidity_mean"],
+              x=df_chart["dt"],
+              y=df_chart["humidity_mean"],
               mode=trace_mode,
               name="平均湿度 (%)",
               line=dict(color="#009688", width=2),
@@ -1364,8 +1398,8 @@ elif menu == "総合グラフ分析":
       )
       fig2.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["humidity_min"],
+              x=df_chart["dt"],
+              y=df_chart["humidity_min"],
               mode=trace_mode,
               name="最小湿度 (%)",
               line=dict(color="#80cbc4", width=1.5),
@@ -1376,9 +1410,9 @@ elif menu == "総合グラフ分析":
 
       fig2.add_trace(
           go.Bar(
-              x=df_filtered["dt"],
-              y=df_filtered["precip_total"],
-              name="日降水量 (mm)",
+              x=df_chart["dt"],
+              y=df_chart["precip_total"],
+              name="降水量 (mm)",
               marker_color="#2196f3",
               opacity=0.6,
           ),
@@ -1388,8 +1422,8 @@ elif menu == "総合グラフ分析":
       )
       fig2.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["sunshine_hours"],
+              x=df_chart["dt"],
+              y=df_chart["sunshine_hours"],
               mode=trace_mode,
               name="日照時間 (時間)",
               line=dict(color="#ff9800", width=2),
@@ -1427,8 +1461,8 @@ elif menu == "総合グラフ分析":
 
       fig3.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["wind_speed_max"],
+              x=df_chart["dt"],
+              y=df_chart["wind_speed_max"],
               mode=trace_mode,
               name="最大風速 (m/s)",
               line=dict(color="#ff5722", width=2),
@@ -1437,8 +1471,8 @@ elif menu == "総合グラフ分析":
       )
       fig3.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["wind_speed_instant"],
+              x=df_chart["dt"],
+              y=df_chart["wind_speed_instant"],
               mode=trace_mode,
               name="最大瞬間風速 (m/s)",
               line=dict(color="#ffab91", width=1.5),
@@ -1447,8 +1481,8 @@ elif menu == "総合グラフ分析":
       )
       fig3.add_trace(
           go.Scatter(
-              x=df_filtered["dt"],
-              y=df_filtered["press_land"],
+              x=df_chart["dt"],
+              y=df_chart["press_land"],
               mode="lines",
               name="現地気圧 (hPa)",
               line=dict(color="#9c27b0", width=1.5),
@@ -1474,7 +1508,7 @@ elif menu == "総合グラフ分析":
       # --- グラフ4: 培養液 (EC / pH) の推移 [手動測定データのみ] ---
       st.subheader("4. ハウス培養液 (EC / pH) の推移 [手動測定データのみ]")
 
-      df_ec_ph = df_filtered.dropna(subset=["ec", "ph"], how="all")
+      df_ec_ph = df_chart.dropna(subset=["ec", "ph"], how="all")
 
       fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 
