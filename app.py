@@ -181,19 +181,20 @@ def bg_smart_climate_sync():
 threading.Thread(target=bg_smart_climate_sync, daemon=True).start()
 
 # ----------------------------------------------------
-# ログイン状態のセッション管理
+# 🔐 ログイン状態のセッション自動保持・保護処理
 # ----------------------------------------------------
+st.set_page_config(
+    page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
+)
+
+# セッション状態の安全な初期化（コード変更時も破棄されない構造）
 if "logged_in" not in st.session_state:
   st.session_state["logged_in"] = False
 if "user_info" not in st.session_state:
   st.session_state["user_info"] = None
 
-st.set_page_config(
-    page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
-)
-
 # ----------------------------------------------------
-# 📱 スマホ全画面化 ＆ 日本語カレンダー強制ロケール補正
+# 📱 スマホ全画面化 ＆ 日本語カレンダーロケール補正
 # ----------------------------------------------------
 components.html(
     """
@@ -221,7 +222,6 @@ components.html(
             head.appendChild(metaAndroid);
         }
 
-        // ブラウザの言語設定を日本語(ja-JP)に上書き固定するスクリプト
         try {
             Object.defineProperty(navigator, 'language', {get: function() { return 'ja-JP'; }});
             Object.defineProperty(navigator, 'languages', {get: function() { return ['ja-JP', 'ja']; }});
@@ -1263,7 +1263,7 @@ elif menu == "総合グラフ分析":
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
       # ----------------------------------------------------
-      # 💡 180日以上の長期間の場合は全環境項目を「週平均」に自動統一変換（降水量も含む）
+      # 💡 180日以上の長期間の場合は全環境項目（降水量含む）を「週平均」に自動統一変換
       # ----------------------------------------------------
       period_days = (end_f - start_f).days
 
@@ -1275,7 +1275,7 @@ elif menu == "総合グラフ分析":
         df_chart = (
             df_filtered.set_index("dt")
             .resample("W")
-            .mean(numeric_only=True)  # 降水量(precip_total)も含めて全項目を週平均(日平均)で算出
+            .mean(numeric_only=True)  # 降水量も含めて全項目を週平均(日平均)で算出
             .reset_index()
         )
       else:
@@ -1400,7 +1400,6 @@ elif menu == "総合グラフ分析":
           col=1,
       )
 
-      # 降水量も他と同様に「週平均」の高さで棒グラフ表示（180日以上の場合）
       precip_label = (
           "日平均降水量 (mm/日)" if period_days >= 180 else "日降水量 (mm)"
       )
