@@ -955,7 +955,6 @@ elif menu == "収穫実績・分析":
 
     st.subheader("1. 品目別 収穫総重量の推移 (kg)")
 
-    # 動的な日付・年月表記計算
     today_dt_obj = datetime.now().date()
     this_month_lbl = (
         f"今月 ({today_dt_obj.year}年{today_dt_obj.month}月)"
@@ -1241,36 +1240,34 @@ elif menu == "総合グラフ分析":
       st.warning("⚠️ 選択された期間のデータが見つかりません。")
     else:
       # ----------------------------------------------------
-      # 💡 表示期間の長さに応じて「軸の目盛り間隔」と「点（マーカー）の表示/非表示」を動的設定
+      # 💡 表示期間の長さに応じた「軸の目盛り間隔」設定
       # ----------------------------------------------------
       period_days = (end_f - start_f).days
 
-      # 軸の設定
       if period_days <= 60:
-        dtick_val = "D1"  # 1日単位
+        dtick_val = "D1"
         date_format = "%m/%d"
       elif period_days <= 180:
-        dtick_val = (
-            7 * 86400000
-        )  # 約1週間単位 (ミリ秒指定: Plotlyの仕様による)
+        dtick_val = 7 * 86400000
         date_format = "%m/%d"
       else:
-        dtick_val = "M1"  # 1ヶ月単位
+        dtick_val = "M1"
         date_format = "%Y/%m"
 
-      # データ点（マーカー）の表示設定（60日以上の長期間の場合は点無しにして線のみにする）
+      # データ点（マーカー）の表示制御（60日以上は点なし）
       trace_mode = "lines+markers" if period_days < 60 else "lines"
 
       # --- グラフ1: 外気気温 ＆ ハウス内気温・水温 ---
       st.subheader("1. 気温 (外気最高/平均/最低) と ハウス内気温・水温の推移")
       fig1 = go.Figure()
+      # すべて実線（実線＝dash指定なし）に固定し、長期間表示でも潰れないように統一
       fig1.add_trace(
           go.Scatter(
               x=df_filtered["dt"],
               y=df_filtered["max_temp"],
               mode=trace_mode,
               name="外気・最高気温 (℃)",
-              line=dict(color="#e53935", dash="dash"),
+              line=dict(color="#e53935", width=1.5),
           )
       )
       fig1.add_trace(
@@ -1288,7 +1285,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["min_temp"],
               mode=trace_mode,
               name="外気・最低気温 (℃)",
-              line=dict(color="#1e88e5", dash="dash"),
+              line=dict(color="#1e88e5", width=1.5),
           )
       )
 
@@ -1350,7 +1347,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["humidity_mean"],
               mode=trace_mode,
               name="平均湿度 (%)",
-              line=dict(color="#009688"),
+              line=dict(color="#009688", width=2),
           ),
           row=1,
           col=1,
@@ -1361,7 +1358,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["humidity_min"],
               mode=trace_mode,
               name="最小湿度 (%)",
-              line=dict(color="#80cbc4", dash="dot"),
+              line=dict(color="#80cbc4", width=1.5),
           ),
           row=1,
           col=1,
@@ -1424,7 +1421,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["wind_speed_max"],
               mode=trace_mode,
               name="最大風速 (m/s)",
-              line=dict(color="#ff5722"),
+              line=dict(color="#ff5722", width=2),
           ),
           secondary_y=False,
       )
@@ -1434,7 +1431,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["wind_speed_instant"],
               mode=trace_mode,
               name="最大瞬間風速 (m/s)",
-              line=dict(color="#ffab91", dash="dash"),
+              line=dict(color="#ffab91", width=1.5),
           ),
           secondary_y=False,
       )
@@ -1444,7 +1441,7 @@ elif menu == "総合グラフ分析":
               y=df_filtered["press_land"],
               mode="lines",
               name="現地気圧 (hPa)",
-              line=dict(color="#9c27b0", dash="dot"),
+              line=dict(color="#9c27b0", width=1.5),
           ),
           secondary_y=True,
       )
@@ -1471,7 +1468,6 @@ elif menu == "総合グラフ分析":
 
       fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 
-      # データが存在する場合はプロット
       if not df_ec_ph.empty:
         fig4.add_trace(
             go.Scatter(
@@ -1489,7 +1485,7 @@ elif menu == "総合グラフ分析":
                 y=df_ec_ph["ph"],
                 mode=trace_mode,
                 name="pH",
-                line=dict(color="#00bcd4", width=2.5, dash="dash"),
+                line=dict(color="#00bcd4", width=2.5),
             ),
             secondary_y=True,
         )
@@ -1497,7 +1493,6 @@ elif menu == "総合グラフ分析":
       fig4.update_yaxes(title_text="EC (dS/m)", secondary_y=False)
       fig4.update_yaxes(title_text="pH", secondary_y=True)
 
-      # 軸を明示的に 'date' 型指定することで数値化バグを完全に回避
       fig4.update_xaxes(
           type="date",
           tickformat=date_format,
