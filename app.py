@@ -44,7 +44,7 @@ def bg_smart_climate_sync():
     if latest_date_in_db == today_str:
       return
 
-    start_date_str = "2026-06-01"
+    start_date_str = f"{datetime.now().year - 1}-01-01"
     end_date_str = datetime.now().strftime("%Y-%m-%d")
 
     url = (
@@ -956,13 +956,16 @@ elif menu == "収穫実績・分析":
     st.subheader("1. 品目別 収穫総重量の推移 (kg)")
 
     today_dt_obj = datetime.now().date()
-    this_month_lbl = (
-        f"今月 ({today_dt_obj.year}年{today_dt_obj.month}月)"
-    )
+    this_year_val = today_dt_obj.year
+    last_year_val = this_year_val - 1
+
+    this_month_lbl = f"今月 ({this_year_val}年{today_dt_obj.month}月)"
     first_day_curr = today_dt_obj.replace(day=1)
     last_day_prev = first_day_curr - timedelta(days=1)
     prev_month_lbl = f"先月 ({last_day_prev.year}年{last_day_prev.month}月)"
-    this_year_lbl = f"{today_dt_obj.year}年全期間"
+
+    this_year_lbl = f"今年 ({this_year_val}年全期間)"
+    last_year_lbl = f"昨年 ({last_year_val}年全期間)"
 
     filter_type_h = st.selectbox(
         "グラフ表示期間の選択",
@@ -971,6 +974,7 @@ elif menu == "収穫実績・分析":
             this_month_lbl,
             prev_month_lbl,
             this_year_lbl,
+            last_year_lbl,
             "全期間",
             "日付で直接指定",
         ],
@@ -985,12 +989,14 @@ elif menu == "収穫実績・分析":
       start_h = date(last_day_prev.year, last_day_prev.month, 1)
       end_h = last_day_prev
     elif filter_type_h == this_year_lbl:
-      start_h, end_h = date(today.year, 1, 1), date(today.year, 12, 31)
+      start_h, end_h = date(this_year_val, 1, 1), date(this_year_val, 12, 31)
+    elif filter_type_h == last_year_lbl:
+      start_h, end_h = date(last_year_val, 1, 1), date(last_year_val, 12, 31)
     elif filter_type_h == "全期間":
       min_d = (
           df_s["dt"].min().date()
           if not df_s["dt"].isna().all()
-          else date(today.year, 1, 1)
+          else date(this_year_val, 1, 1)
       )
       start_h, end_h = min_d, today
     else:
@@ -1185,13 +1191,16 @@ elif menu == "総合グラフ分析":
     st.subheader("📅 表示期間の選択")
 
     today_dt_obj = datetime.now().date()
-    this_month_lbl = (
-        f"今月 ({today_dt_obj.year}年{today_dt_obj.month}月)"
-    )
+    this_year_val = today_dt_obj.year
+    last_year_val = this_year_val - 1
+
+    this_month_lbl = f"今月 ({this_year_val}年{today_dt_obj.month}月)"
     first_day_curr = today_dt_obj.replace(day=1)
     last_day_prev = first_day_curr - timedelta(days=1)
     prev_month_lbl = f"先月 ({last_day_prev.year}年{last_day_prev.month}月)"
-    this_year_lbl = f"{today_dt_obj.year}年全期間"
+
+    this_year_lbl = f"今年 ({this_year_val}年全期間)"
+    last_year_lbl = f"昨年 ({last_year_val}年全期間)"
 
     filter_type = st.selectbox(
         "期間プリセット",
@@ -1200,6 +1209,7 @@ elif menu == "総合グラフ分析":
             this_month_lbl,
             prev_month_lbl,
             this_year_lbl,
+            last_year_lbl,
             "全期間",
             "日付で直接指定",
         ],
@@ -1214,7 +1224,9 @@ elif menu == "総合グラフ分析":
       start_f = date(last_day_prev.year, last_day_prev.month, 1)
       end_f = last_day_prev
     elif filter_type == this_year_lbl:
-      start_f, end_f = date(today.year, 1, 1), date(today.year, 12, 31)
+      start_f, end_f = date(this_year_val, 1, 1), date(this_year_val, 12, 31)
+    elif filter_type == last_year_lbl:
+      start_f, end_f = date(last_year_val, 1, 1), date(last_year_val, 12, 31)
     elif filter_type == "全期間":
       start_f, end_f = df["dt"].min().date(), df["dt"].max().date()
     else:
@@ -1254,13 +1266,11 @@ elif menu == "総合グラフ分析":
         dtick_val = "M1"
         date_format = "%Y/%m"
 
-      # データ点（マーカー）の表示制御（60日以上は点なし）
       trace_mode = "lines+markers" if period_days < 60 else "lines"
 
       # --- グラフ1: 外気気温 ＆ ハウス内気温・水温 ---
       st.subheader("1. 気温 (外気最高/平均/最低) と ハウス内気温・水温の推移")
       fig1 = go.Figure()
-      # すべて実線（実線＝dash指定なし）に固定し、長期間表示でも潰れないように統一
       fig1.add_trace(
           go.Scatter(
               x=df_filtered["dt"],
