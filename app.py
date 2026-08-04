@@ -1302,7 +1302,7 @@ elif menu == "総合グラフ分析":
           hovermode="x unified",
           template="plotly_dark",
           height=450,
-          xaxis=dict(tickformat="%m/%d", range=[start_f, end_f]),
+          xaxis=dict(tickformat="%m/%d", dtick="D1", range=[start_f, end_f]),
       )
       st.plotly_chart(fig1, use_container_width=True)
 
@@ -1375,7 +1375,7 @@ elif menu == "総合グラフ分析":
           title_text="日照時間 (時間)", row=2, col=1, secondary_y=True
       )
       fig2.update_xaxes(
-          tickformat="%m/%d", range=[start_f, end_f], row=2, col=1
+          tickformat="%m/%d", dtick="D1", range=[start_f, end_f], row=2, col=1
       )
       fig2.update_layout(
           hovermode="x unified", template="plotly_dark", height=650
@@ -1421,7 +1421,7 @@ elif menu == "総合グラフ分析":
 
       fig3.update_yaxes(title_text="風速 (m/s)", secondary_y=False)
       fig3.update_yaxes(title_text="気圧 (hPa)", secondary_y=True)
-      fig3.update_xaxes(tickformat="%m/%d", range=[start_f, end_f])
+      fig3.update_xaxes(tickformat="%m/%d", dtick="D1", range=[start_f, end_f])
       fig3.update_layout(
           hovermode="x unified", template="plotly_dark", height=420
       )
@@ -1434,14 +1434,10 @@ elif menu == "総合グラフ分析":
 
       df_ec_ph = df_filtered.dropna(subset=["ec", "ph"], how="all")
 
-      if df_ec_ph.empty:
-        st.info(
-            "ℹ️ 選択された期間内に手動測定された EC / pH"
-            " データはありません。「今日の環境入力」から入力してください。"
-        )
-      else:
-        fig4 = make_subplots(specs=[[{"secondary_y": True}]])
+      # データが空でもグラフ枠を表示する処理
+      fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 
+      if not df_ec_ph.empty:
         fig4.add_trace(
             go.Scatter(
                 x=df_ec_ph["dt"],
@@ -1463,16 +1459,18 @@ elif menu == "総合グラフ分析":
             secondary_y=True,
         )
 
-        fig4.update_yaxes(title_text="EC (dS/m)", secondary_y=False)
-        fig4.update_yaxes(title_text="pH", secondary_y=True)
+      fig4.update_yaxes(title_text="EC (dS/m)", secondary_y=False)
+      fig4.update_yaxes(title_text="pH", secondary_y=True)
 
-        # X軸範囲を表示期間（start_f 〜 end_f）に強制固定（データ件数が少なくても始点が表示されます）
-        fig4.update_xaxes(tickformat="%m/%d", range=[start_f, end_f])
+      # dtick="D1" で1日ごとの目盛りに固定し、range=[start_f, end_f] でデータ無し時も他グラフと同じ軸幅で表示
+      fig4.update_xaxes(
+          tickformat="%m/%d", dtick="D1", range=[start_f, end_f]
+      )
 
-        fig4.update_layout(
-            hovermode="x unified", template="plotly_dark", height=420
-        )
-        st.plotly_chart(fig4, use_container_width=True)
+      fig4.update_layout(
+          hovermode="x unified", template="plotly_dark", height=420
+      )
+      st.plotly_chart(fig4, use_container_width=True)
 
 # ----------------------------------------------------
 # ⑧ 👥 ユーザー・権限管理（管理者専用画面）
