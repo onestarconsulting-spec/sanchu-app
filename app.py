@@ -27,32 +27,36 @@ from plotly.subplots import make_subplots
 # データベースの初期化
 init_db()
 
-# 仙台の観測座標
 SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
+st.set_page_config(
+    page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
+)
+
 # ----------------------------------------------------
-# 画面中央「クルクル（ローダー）」カスタムCSS注入
+# 画面中央「回転ローダー（クルクル）」表示スタイル強制的適用
 # ----------------------------------------------------
 st.markdown(
     """
     <style>
-    /* 読み込み中・再計算中のローダー（クルクル）を画面中央に固定表示 */
-    div[data-testid="stStatusWidget"] {
+    /* 読み込み中表示を画面中央に大きなモーダルスタイルで固定 */
+    [data-testid="stStatusWidget"], .stSpinner {
         position: fixed !important;
         top: 50% !important;
         left: 50% !important;
         transform: translate(-50%, -50%) !important;
         z-index: 999999 !important;
-        background-color: rgba(14, 17, 23, 0.85) !important;
-        padding: 20px 30px !important;
-        border-radius: 12px !important;
-        border: 1px solid #333333 !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+        background-color: rgba(14, 17, 23, 0.9) !important;
+        padding: 30px 50px !important;
+        border-radius: 16px !important;
+        border: 2px solid #00bcd4 !important;
+        box-shadow: 0 0 30px rgba(0, 188, 212, 0.4) !important;
     }
-    div[data-testid="stStatusWidget"] * {
-        font-size: 16px !important;
-        color: #00bcd4 !important;
+    [data-testid="stStatusWidget"] *, .stSpinner * {
+        font-size: 18px !important;
+        font-weight: bold !important;
+        color: #ffffff !important;
     }
     </style>
     """,
@@ -209,12 +213,8 @@ def bg_smart_climate_sync():
 threading.Thread(target=bg_smart_climate_sync, daemon=True).start()
 
 # ----------------------------------------------------
-# 🔐 画面再読み込み時のログイン自動復元（URLパラメータ方式）
+# 🔐 ログイン状態の自動復元処理
 # ----------------------------------------------------
-st.set_page_config(
-    page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
-)
-
 query_params = st.query_params
 
 if "logged_in" not in st.session_state:
@@ -222,7 +222,7 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
   st.session_state["user_info"] = None
 
-# 再読み込み時にURLパラメータからログインセッションを自動復元
+# URLパラメータからの自動復元
 if not st.session_state["logged_in"] and "u" in query_params:
   u_name = query_params["u"]
   all_users = select_all_users()
@@ -237,38 +237,30 @@ if not st.session_state["logged_in"] and "u" in query_params:
     }
 
 # ----------------------------------------------------
-# 📱 スマホ全画面化 ＆ 日本語カレンダーロケール補正
+# 📱 スマホ全画面化 ＆ 親要素とのログイン連携
 # ----------------------------------------------------
+login_u = (
+    st.session_state["user_info"]["username"]
+    if st.session_state["user_info"]
+    else ""
+)
 components.html(
-    """
+    f"""
     <script>
         const head = window.parent.document.head;
 
-        if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+        if (!head.querySelector('meta[name="apple-mobile-web-app-capable"]')) {{
             const metaApple = window.parent.document.createElement('meta');
             metaApple.name = 'apple-mobile-web-app-capable';
             metaApple.content = 'yes';
             head.appendChild(metaApple);
-        }
-        
-        if (!head.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')) {
-            const metaStatus = window.parent.document.createElement('meta');
-            metaStatus.name = 'apple-mobile-web-app-status-bar-style';
-            metaStatus.content = 'default';
-            head.appendChild(metaStatus);
-        }
+        }}
 
-        if (!head.querySelector('meta[name="mobile-web-app-capable"]')) {
-            const metaAndroid = window.parent.document.createElement('meta');
-            metaAndroid.name = 'mobile-web-app-capable';
-            metaAndroid.content = 'yes';
-            head.appendChild(metaAndroid);
-        }
-
-        try {
-            Object.defineProperty(navigator, 'language', {get: function() { return 'ja-JP'; }});
-            Object.defineProperty(navigator, 'languages', {get: function() { return ['ja-JP', 'ja']; }});
-        } catch(e) {}
+        // ログイン状態を親要素(index.html)へ保存通知
+        const loggedUser = "{login_u}";
+        if (loggedUser) {{
+            window.parent.postMessage({{ type: 'SET_USER', username: loggedUser }}, '*');
+        }}
     </script>
     """,
     height=0,
@@ -291,7 +283,6 @@ if not st.session_state["logged_in"]:
       if user:
         st.session_state["logged_in"] = True
         st.session_state["user_info"] = user
-        # ログイン情報をURLクエリパラメータへ永続付与（更新対策）
         st.query_params["u"] = user["username"]
         st.rerun()
       else:
@@ -383,6 +374,11 @@ if st.sidebar.button("🚪 ログアウト"):
   st.session_state["logged_in"] = False
   st.session_state["user_info"] = None
   st.query_params.clear()
+  components.html(
+      "<script>window.parent.postMessage({ type: 'CLEAR_USER' },"
+      " '*');</script>",
+      height=0,
+  )
   st.rerun()
 
 st.sidebar.markdown("---")
