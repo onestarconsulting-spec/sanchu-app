@@ -31,6 +31,34 @@ init_db()
 SENDAI_LAT = 38.2688
 SENDAI_LON = 140.8721
 
+# ----------------------------------------------------
+# 画面中央「クルクル（ローダー）」カスタムCSS注入
+# ----------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* 読み込み中・再計算中のローダー（クルクル）を画面中央に固定表示 */
+    div[data-testid="stStatusWidget"] {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        z-index: 999999 !important;
+        background-color: rgba(14, 17, 23, 0.85) !important;
+        padding: 20px 30px !important;
+        border-radius: 12px !important;
+        border: 1px solid #333333 !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+    }
+    div[data-testid="stStatusWidget"] * {
+        font-size: 16px !important;
+        color: #00bcd4 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ----------------------------------------------------
 # ⚡ 爆速化：バックグラウンド非同期＆スマート差分同期
@@ -181,13 +209,12 @@ def bg_smart_climate_sync():
 threading.Thread(target=bg_smart_climate_sync, daemon=True).start()
 
 # ----------------------------------------------------
-# 🔐 ログイン状態の永続保持・管理処理
+# 🔐 画面再読み込み時のログイン自動復元（URLパラメータ方式）
 # ----------------------------------------------------
 st.set_page_config(
     page_title="水耕栽培管理・収穫予測システム", page_icon="🌱", layout="wide"
 )
 
-# URLパラメータを利用したセッション永続化チェック
 query_params = st.query_params
 
 if "logged_in" not in st.session_state:
@@ -195,9 +222,9 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
   st.session_state["user_info"] = None
 
-# ブラウザ更新時にURLキーから自動再ログイン復元を行う
-if not st.session_state["logged_in"] and "user" in query_params:
-  u_name = query_params["user"]
+# 再読み込み時にURLパラメータからログインセッションを自動復元
+if not st.session_state["logged_in"] and "u" in query_params:
+  u_name = query_params["u"]
   all_users = select_all_users()
   matched_user = next((u for u in all_users if u[1] == u_name), None)
   if matched_user:
@@ -264,8 +291,8 @@ if not st.session_state["logged_in"]:
       if user:
         st.session_state["logged_in"] = True
         st.session_state["user_info"] = user
-        # ログイン情報をURLパラメータに付与（更新時の自動復元用）
-        st.query_params["user"] = user["username"]
+        # ログイン情報をURLクエリパラメータへ永続付与（更新対策）
+        st.query_params["u"] = user["username"]
         st.rerun()
       else:
         st.error("⚠️ ユーザーIDまたはパスワードが正しくありません。")
