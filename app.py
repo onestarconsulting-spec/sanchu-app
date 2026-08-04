@@ -43,7 +43,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Streamlit標準スピナーを画面中央に全画面オーバーレイで表示 */
     div[data-testid="stSpinner"] {
         position: fixed !important;
         top: 0 !important;
@@ -68,12 +67,12 @@ st.markdown(
 
 
 # ----------------------------------------------------
-# 📅 完全日本語対応「年月日」選択コンポーネント関数
+# 📅 完全日本語対応「年月日」選択コンポーネント関数（引数エラー修正版）
 # ----------------------------------------------------
-def japanese_date_input(label, default_date=None, key_prefix="jp_date"):
+def japanese_date_input(label, value=None, key_prefix="jp_date"):
   """英語カレンダーを使わず、完全に日本語で年月日を選択するコンポーネント"""
-  if default_date is None:
-    default_date = datetime.now().date()
+  if value is None:
+    value = datetime.now().date()
 
   st.write(f"**{label}**")
   c_y, c_m, c_d = st.columns(3)
@@ -84,19 +83,17 @@ def japanese_date_input(label, default_date=None, key_prefix="jp_date"):
   sel_year = c_y.selectbox(
       "年",
       years,
-      index=years.index(default_date.year)
-      if default_date.year in years
-      else len(years) - 1,
+      index=years.index(value.year) if value.year in years else len(years) - 1,
       key=f"{key_prefix}_year",
   )
   sel_month = c_m.selectbox(
-      "月", months, index=default_date.month - 1, key=f"{key_prefix}_month"
+      "月", months, index=value.month - 1, key=f"{key_prefix}_month"
   )
 
   max_days = calendar.monthrange(sel_year, sel_month)[1]
   days = list(range(1, max_days + 1))
   default_day_idx = (
-      default_date.day - 1 if default_date.day <= max_days else max_days - 1
+      value.day - 1 if value.day <= max_days else max_days - 1
   )
 
   sel_day = c_d.selectbox(
@@ -116,7 +113,6 @@ if "logged_in" not in st.session_state:
 if "user_info" not in st.session_state:
   st.session_state["user_info"] = None
 
-# URLパラメータが存在する場合はセッションを全自動復元（更新してもログアウトしない）
 if not st.session_state["logged_in"] and "u" in query_params:
   u_name = query_params["u"]
   all_users = select_all_users()
@@ -573,7 +569,6 @@ elif menu == "定植登録":
         default=["1番ベッド"],
     )
 
-    # 完全日本語入力
     plant_date_val = japanese_date_input("定植日", key_prefix="teichaku_date")
 
     quantity = st.number_input(
@@ -646,7 +641,6 @@ elif menu == "今日の環境入力":
         break
 
   with st.form("kankyo_form"):
-    # 完全日本語入力
     date_val = japanese_date_input("測定日付", key_prefix="kankyo_date")
 
     house_temp = st.number_input(
@@ -690,7 +684,6 @@ elif menu == "収穫登録":
   )
 
   with st.form("shukaku_form"):
-    # 完全日本語入力
     shukaku_date_val = japanese_date_input(
         "収穫日", key_prefix="shukaku_date"
     )
